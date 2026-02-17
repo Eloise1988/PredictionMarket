@@ -122,3 +122,4 @@ Detailed protocol: `docs/BIAS_CONTROLS.md`.
 - Prediction markets can be noisy and manipulated in low-liquidity contracts.
 - Alpha Vantage free tier is not enough for high-frequency production; use a higher-tier market data provider for live deployment.
 - Add hard risk controls before any capital deployment (position sizing, max drawdown stop, theme concentration limits, and trade execution safeguards).
+# PredictionMarket
