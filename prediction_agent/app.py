@@ -80,6 +80,7 @@ class DecisionAgent:
             return []
 
         logger.info("Processing prediction signals (eligible=%s)", len(filtered_signals))
+        self._log_eligible_markets(filtered_signals)
         self.store.save_signals(filtered_signals)
 
         if not self.market_mapper.enabled():
@@ -97,7 +98,9 @@ class DecisionAgent:
                 min_linkage_score=self.settings.llm_min_linkage_score,
             )
             if not candidates:
+                logger.info("LLM candidates | none | question=%s", signal.question[:220])
                 continue
+            self._log_llm_candidates(signal, candidates)
 
             candidates_by_market.append((signal, candidates))
             for c in candidates:
@@ -276,12 +279,10 @@ class DecisionAgent:
             reverse=True,
         )
 
-        finance_ranked = [s for s in ranked if (not self.settings.finance_only_mode) or _is_finance_signal(s)]
-        if self.settings.finance_only_mode:
-            finance_ranked = finance_ranked[: self.settings.top_liquidity_finance_markets]
+        candidates = [s for s in ranked if (not self.settings.finance_only_mode) or _is_finance_signal(s)]
 
         filtered: List[PredictionSignal] = []
-        for signal in finance_ranked:
+        for signal in candidates:
             if signal.liquidity < self.settings.min_signal_liquidity:
                 continue
             if signal.volume_24h < self.settings.min_signal_volume_24h:
@@ -296,7 +297,9 @@ class DecisionAgent:
                     continue
 
             filtered.append(signal)
-            if len(filtered) >= self.settings.max_signals_per_cycle:
+            if self.settings.finance_only_mode and len(filtered) >= self.settings.top_liquidity_finance_markets:
+                break
+            if not self.settings.finance_only_mode and len(filtered) >= self.settings.max_signals_per_cycle:
                 break
 
         return filtered
@@ -312,6 +315,29 @@ class DecisionAgent:
                 s.volume_24h,
                 s.question[:180],
             )
+
+    def _log_eligible_markets(self, signals: List[PredictionSignal]) -> None:
+        for i, s in enumerate(signals, start=1):
+            logger.info(
+                "Bet %d | source=%s | liquidity=%.0f | prob_yes=%.1f%% | question=%s",
+                i,
+                s.source,
+                s.liquidity,
+                s.prob_yes * 100.0,
+                s.question[:220],
+            )
+
+    def _log_llm_candidates(self, signal: PredictionSignal, candidates: List[MarketStockCandidate]) -> None:
+        rows = ", ".join(
+            f"{c.ticker}({c.direction_if_yes},link={c.linkage_score:.2f})"
+            for c in candidates
+        )
+        logger.info(
+            "LLM candidates | prob_yes=%.1f%% | question=%s | candidates=%s",
+            signal.prob_yes * 100.0,
+            signal.question[:180],
+            rows[:1000],
+        )
 
     def _load_equity_snapshots(self, tickers: List[str], dry_run: bool) -> Dict[str, EquitySnapshot]:
         snapshots: Dict[str, EquitySnapshot] = {}

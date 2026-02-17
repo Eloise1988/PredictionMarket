@@ -45,6 +45,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 - `MAX_MARKETS_FOR_LLM=5`
 - `LLM_MAP_MAX_TICKERS=8`
 - No fixed ticker universe is required; tickers are discovered per-market by the LLM.
+- Selection logic: scan finance markets by liquidity and return the first 5 that pass liquidity/probability filters.
 
 These are set in `.env` and can be tuned without code changes.
 
