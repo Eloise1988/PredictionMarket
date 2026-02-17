@@ -1,0 +1,124 @@
+# Prediction Market -> Equity Signal Agent
+
+Decision-support agent that ingests prediction market data (Polymarket + Kalshi), maps high-conviction events to exposed equities, scores potential long/short ideas, stores everything in MongoDB, and sends Telegram alerts.
+
+## What this is
+- Real-time monitoring and ranking of *potentially impacted* stocks.
+- Risk-aware signal generation, not auto-trading.
+- Built for Ubuntu 20 + MongoDB + OpenAI API + Telegram Bot API.
+
+## Core flow
+1. Fetch open markets from Polymarket and Kalshi.
+2. Normalize to event probabilities and liquidity/volume quality.
+3. Match event text to pre-defined macro/geopolitical themes.
+4. Map each theme to exposed equities with direction and weight.
+5. Pull valuation + quote data (Alpha Vantage) for scoring.
+6. Aggregate cross-market consensus and rank/diversify ideas.
+7. Deduplicate alerts with MongoDB cooldown digest.
+8. Send Telegram message with concise rationale.
+
+## Iteration 2 features
+- Websocket ingestion service for lower-latency updates:
+```bash
+python3 -m prediction_agent.streaming.service --dry-run
+```
+- Backtest + walk-forward threshold calibration:
+```bash
+python3 -m prediction_agent.backtest.runner --save-report
+```
+- Backtest window example:
+```bash
+python3 -m prediction_agent.backtest.runner --start 2025-01-01 --end 2025-12-31 --save-report
+```
+- Built-in unit tests:
+```bash
+python3 -m unittest discover -s tests -p 'test_*.py'
+```
+- Company/ETF background lines are included in alert output and LLM-ranked ideas for clearer rationale.
+
+## Quick start (local)
+1. Create environment and install dependencies:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+2. Configure env:
+```bash
+cp .env.example .env
+# Fill API keys and Telegram chat settings
+```
+3. Start MongoDB (local or docker):
+```bash
+docker compose up -d mongodb
+```
+4. Run one cycle safely:
+```bash
+python3 -m prediction_agent.app --once --dry-run
+```
+5. Run continuous polling:
+```bash
+python3 -m prediction_agent.app
+```
+
+Or use Make targets:
+```bash
+make run-once
+make stream-dry-run
+make backtest
+make test
+```
+
+## Docker
+```bash
+cp .env.example .env
+# Fill .env first
+
+docker compose up --build
+```
+
+## Ubuntu 20 systemd deployment
+1. Clone repo to `/opt/prediction-agent`.
+2. Create virtualenv and install dependencies.
+3. Copy `deploy/prediction-agent.service` to `/etc/systemd/system/`.
+4. Update `User`, `Group`, and paths in the unit file if needed.
+5. Start service:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now prediction-agent
+sudo systemctl status prediction-agent
+```
+
+## Signal model
+Final score is a weighted blend of:
+- probability edge from prediction market (distance from 50%)
+- market quality (liquidity + volume + freshness)
+- event->equity exposure weight
+- valuation attractiveness (PE/PB/EV-EBITDA)
+- momentum consistency
+
+## Real-time best practices included
+- provider abstraction and retry logic
+- MongoDB TTL indexes for storage hygiene
+- idempotent digest-based alert suppression
+- configurable cooldown windows
+- minimum edge/liquidity filters to reduce low-quality contracts
+- cross-market confirmation bonus to reduce single-venue noise
+- keyword boundary matching + sports-market filtering to reduce false thematic matches
+- dry-run mode for safe rollout
+
+## Backtest bias controls included
+- next-day trade entry to avoid look-ahead bias
+- chronological walk-forward calibration (train then validate forward in time)
+- transaction-cost deduction per trade
+- minimum trades requirement before accepting calibrated thresholds
+- report persistence in Mongo for audit trail
+- optional bias diagnostics report (`sample size`, `threshold stability`, `theme concentration`, `drawdown`)
+
+Detailed protocol: `docs/BIAS_CONTROLS.md`.
+
+## Important risk notes
+- This is not investment advice.
+- Prediction markets can be noisy and manipulated in low-liquidity contracts.
+- Alpha Vantage free tier is not enough for high-frequency production; use a higher-tier market data provider for live deployment.
+- Add hard risk controls before any capital deployment (position sizing, max drawdown stop, theme concentration limits, and trade execution safeguards).
