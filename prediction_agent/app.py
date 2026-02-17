@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
@@ -36,6 +36,7 @@ class FilterDiagnostics:
     rejected_probability: int = 0
     rejected_edge: int = 0
     passed: int = 0
+    sample_rows: List[str] = field(default_factory=list)
 
 
 class DecisionAgent:
@@ -104,6 +105,8 @@ class DecisionAgent:
                 diag.rejected_edge,
                 diag.passed,
             )
+            for row in diag.sample_rows:
+                logger.info("Gate detail | %s", row)
             return []
 
         logger.info("Processing prediction signals (eligible=%s)", len(filtered_signals))
@@ -316,22 +319,34 @@ class DecisionAgent:
 
         filtered: List[PredictionSignal] = []
         for signal in candidates:
+            reason = "passed"
             if signal.liquidity < self.settings.min_signal_liquidity:
                 diag.rejected_liquidity += 1
-                continue
-            if signal.volume_24h < self.settings.min_signal_volume_24h:
+                reason = "liquidity"
+            elif signal.volume_24h < self.settings.min_signal_volume_24h:
                 diag.rejected_volume += 1
-                continue
+                reason = "volume"
 
-            if self.settings.enable_probability_gate:
+            if reason == "passed" and self.settings.enable_probability_gate:
                 p = signal.prob_yes
                 if not (p <= self.settings.probability_low_threshold or p >= self.settings.probability_high_threshold):
                     diag.rejected_probability += 1
-                    continue
-                edge = abs(p - 0.5) * 2
-                if edge < self.settings.min_probability_edge:
-                    diag.rejected_edge += 1
-                    continue
+                    reason = "probability"
+                else:
+                    edge = abs(p - 0.5) * 2
+                    if edge < self.settings.min_probability_edge:
+                        diag.rejected_edge += 1
+                        reason = "edge"
+
+            if len(diag.sample_rows) < 30:
+                diag.sample_rows.append(
+                    "source="
+                    f"{signal.source} liq={signal.liquidity:.0f} vol24h={signal.volume_24h:.0f} "
+                    f"prob_yes={signal.prob_yes*100:.1f}% reason={reason} q={signal.question[:180]}"
+                )
+
+            if reason != "passed":
+                continue
 
             filtered.append(signal)
             if self.settings.finance_only_mode and len(filtered) >= self.settings.top_liquidity_finance_markets:
