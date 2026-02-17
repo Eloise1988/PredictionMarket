@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     polymarket_only_mode: bool = Field(default=True, alias="POLYMARKET_ONLY_MODE")
     finance_only_mode: bool = Field(default=True, alias="FINANCE_ONLY_MODE")
     top_liquidity_finance_markets: int = Field(default=5, alias="TOP_LIQUIDITY_FINANCE_MARKETS")
+    polymarket_min_scan_markets: int = Field(default=2000, alias="POLYMARKET_MIN_SCAN_MARKETS")
     enable_probability_gate: bool = Field(default=True, alias="ENABLE_PROBABILITY_GATE")
     max_markets_for_llm: int = Field(default=40, alias="MAX_MARKETS_FOR_LLM")
     llm_map_max_tickers: int = Field(default=8, alias="LLM_MAP_MAX_TICKERS")

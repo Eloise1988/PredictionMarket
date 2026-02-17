@@ -39,6 +39,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 - `POLYMARKET_ONLY_MODE=true`
 - `FINANCE_ONLY_MODE=true`
 - `TOP_LIQUIDITY_FINANCE_MARKETS=5`
+- `POLYMARKET_MIN_SCAN_MARKETS=2000`
 - `MIN_SIGNAL_LIQUIDITY=100000`
 - `PROBABILITY_LOW_THRESHOLD=0.30`
 - `PROBABILITY_HIGH_THRESHOLD=0.70`
@@ -46,6 +47,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 - `LLM_MAP_MAX_TICKERS=8`
 - No fixed ticker universe is required; tickers are discovered per-market by the LLM.
 - Selection logic: scan finance markets by liquidity and return the first 5 that pass liquidity/probability filters.
+- In finance mode, Polymarket scan depth is auto-raised to at least `POLYMARKET_MIN_SCAN_MARKETS`, so the agent does not stop after a shallow first page.
 
 These are set in `.env` and can be tuned without code changes.
 

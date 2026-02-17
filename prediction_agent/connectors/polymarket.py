@@ -18,16 +18,11 @@ class PolymarketConnector(PredictionConnector):
     def __init__(self, gamma_base_url: str, clob_base_url: str, limit: int = 200, timeout: int = 15):
         self.gamma_base_url = gamma_base_url.rstrip("/")
         self.clob_base_url = clob_base_url.rstrip("/")
-        self.limit = limit
+        self.limit = max(1, int(limit))
         self.http = HttpClient(timeout=timeout)
 
     def fetch_signals(self) -> List[PredictionSignal]:
-        params = {"closed": False, "active": True, "limit": self.limit}
-        markets = self.http.get_json(f"{self.gamma_base_url}/markets", params=params)
-        if not isinstance(markets, list):
-            logger.warning("Unexpected Polymarket response type", extra={"type": type(markets).__name__})
-            return []
-
+        markets = self._fetch_markets_paginated()
         signals: List[PredictionSignal] = []
         for market in markets:
             try:
@@ -84,6 +79,49 @@ class PolymarketConnector(PredictionConnector):
                 continue
 
         return signals
+
+    def _fetch_markets_paginated(self) -> List[Dict[str, Any]]:
+        # Gamma caps page size, so we page until limit is reached or no new rows are returned.
+        page_size = min(200, self.limit)
+        offset = 0
+        rows: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+
+        while len(rows) < self.limit:
+            remaining = self.limit - len(rows)
+            params = {
+                "closed": False,
+                "active": True,
+                "limit": min(page_size, remaining),
+                "offset": offset,
+            }
+            payload = self.http.get_json(f"{self.gamma_base_url}/markets", params=params)
+            if not isinstance(payload, list):
+                logger.warning("Unexpected Polymarket response type", extra={"type": type(payload).__name__})
+                break
+            if not payload:
+                break
+
+            added = 0
+            for market in payload:
+                market_id = str(market.get("id") or market.get("conditionId") or market.get("slug") or "")
+                if market_id:
+                    if market_id in seen_ids:
+                        continue
+                    seen_ids.add(market_id)
+                rows.append(market)
+                added += 1
+                if len(rows) >= self.limit:
+                    break
+
+            if len(payload) < params["limit"]:
+                break
+            if added == 0:
+                # Protect against infinite loops if API keeps returning duplicate pages.
+                break
+            offset += len(payload)
+
+        return rows
 
     def _extract_probability_with_source(self, market: Dict[str, Any]) -> tuple[Optional[float], str]:
         outcomes = _parse_json_list(market.get("outcomes"))

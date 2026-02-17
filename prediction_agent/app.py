@@ -46,11 +46,23 @@ class DecisionAgent:
 
         self.connectors = []
         if self.settings.polymarket_enabled:
+            effective_polymarket_limit = self.settings.polymarket_limit
+            if self.settings.finance_only_mode:
+                effective_polymarket_limit = max(
+                    effective_polymarket_limit,
+                    self.settings.polymarket_min_scan_markets,
+                )
+            if effective_polymarket_limit != self.settings.polymarket_limit:
+                logger.info(
+                    "Raising Polymarket scan depth to satisfy target selection | configured=%s effective=%s",
+                    self.settings.polymarket_limit,
+                    effective_polymarket_limit,
+                )
             self.connectors.append(
                 PolymarketConnector(
                     gamma_base_url=self.settings.polymarket_gamma_base_url,
                     clob_base_url=self.settings.polymarket_clob_base_url,
-                    limit=self.settings.polymarket_limit,
+                    limit=effective_polymarket_limit,
                 )
             )
         if self.settings.kalshi_enabled and not self.settings.polymarket_only_mode:
@@ -120,7 +132,11 @@ class DecisionAgent:
         candidates_by_market: List[Tuple[PredictionSignal, List[MarketStockCandidate]]] = []
         tickers_to_load: set[str] = set()
 
-        markets_for_llm = filtered_signals[: self.settings.max_markets_for_llm]
+        if self.settings.finance_only_mode:
+            # Finance mode already stops at TOP_LIQUIDITY_FINANCE_MARKETS during filtering.
+            markets_for_llm = filtered_signals
+        else:
+            markets_for_llm = filtered_signals[: self.settings.max_markets_for_llm]
         for signal in markets_for_llm:
             candidates = self.market_mapper.map_market(
                 signal,
@@ -309,7 +325,7 @@ class DecisionAgent:
 
         ranked = sorted(
             dedup.values(),
-            key=lambda s: (s.liquidity + s.volume_24h),
+            key=lambda s: (s.liquidity, s.volume_24h),
             reverse=True,
         )
         diag.after_dedup = len(ranked)
