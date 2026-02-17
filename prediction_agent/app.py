@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
@@ -22,6 +23,19 @@ from prediction_agent.storage.mongo import MongoStore
 from prediction_agent.utils.logging import configure_logging
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class FilterDiagnostics:
+    total_input: int = 0
+    after_source_filter: int = 0
+    after_dedup: int = 0
+    after_finance_filter: int = 0
+    rejected_liquidity: int = 0
+    rejected_volume: int = 0
+    rejected_probability: int = 0
+    rejected_edge: int = 0
+    passed: int = 0
 
 
 class DecisionAgent:
@@ -74,9 +88,22 @@ class DecisionAgent:
         if not signals:
             return []
 
-        filtered_signals = self._apply_signal_filters(signals)
+        filtered_signals, diag = self._apply_signal_filters(signals)
         if not filtered_signals:
-            logger.info("No signal passed liquidity/probability gates")
+            logger.info(
+                "No signal passed liquidity/probability gates | "
+                "total_input=%s source_filtered=%s dedup=%s finance_candidates=%s "
+                "rejected_liquidity=%s rejected_volume=%s rejected_probability=%s rejected_edge=%s passed=%s",
+                diag.total_input,
+                diag.after_source_filter,
+                diag.after_dedup,
+                diag.after_finance_filter,
+                diag.rejected_liquidity,
+                diag.rejected_volume,
+                diag.rejected_probability,
+                diag.rejected_edge,
+                diag.passed,
+            )
             return []
 
         logger.info("Processing prediction signals (eligible=%s)", len(filtered_signals))
@@ -262,7 +289,9 @@ class DecisionAgent:
 
         return all_signals
 
-    def _apply_signal_filters(self, signals: List[PredictionSignal]) -> List[PredictionSignal]:
+    def _apply_signal_filters(self, signals: List[PredictionSignal]) -> tuple[List[PredictionSignal], FilterDiagnostics]:
+        diag = FilterDiagnostics(total_input=len(signals))
+
         dedup: Dict[str, PredictionSignal] = {}
         for signal in signals:
             if self.settings.polymarket_only_mode and signal.source != "polymarket":
@@ -273,27 +302,35 @@ class DecisionAgent:
             if existing is None or signal.updated_at > existing.updated_at:
                 dedup[key] = signal
 
+        diag.after_source_filter = len(dedup)
+
         ranked = sorted(
             dedup.values(),
             key=lambda s: (s.liquidity + s.volume_24h),
             reverse=True,
         )
+        diag.after_dedup = len(ranked)
 
         candidates = [s for s in ranked if (not self.settings.finance_only_mode) or _is_finance_signal(s)]
+        diag.after_finance_filter = len(candidates)
 
         filtered: List[PredictionSignal] = []
         for signal in candidates:
             if signal.liquidity < self.settings.min_signal_liquidity:
+                diag.rejected_liquidity += 1
                 continue
             if signal.volume_24h < self.settings.min_signal_volume_24h:
+                diag.rejected_volume += 1
                 continue
 
             if self.settings.enable_probability_gate:
                 p = signal.prob_yes
                 if not (p <= self.settings.probability_low_threshold or p >= self.settings.probability_high_threshold):
+                    diag.rejected_probability += 1
                     continue
                 edge = abs(p - 0.5) * 2
                 if edge < self.settings.min_probability_edge:
+                    diag.rejected_edge += 1
                     continue
 
             filtered.append(signal)
@@ -302,7 +339,8 @@ class DecisionAgent:
             if not self.settings.finance_only_mode and len(filtered) >= self.settings.max_signals_per_cycle:
                 break
 
-        return filtered
+        diag.passed = len(filtered)
+        return filtered, diag
 
     def _log_market_samples(self, signals: List[PredictionSignal]) -> None:
         sample = signals[:12]
