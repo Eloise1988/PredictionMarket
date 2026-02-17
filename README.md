@@ -10,11 +10,12 @@ Decision-support agent that ingests prediction market data, filters high-liquidi
 ## Core flow
 1. Fetch open markets (default: Polymarket-wide scan).
 2. Keep only markets above liquidity threshold and with extreme probabilities (default <=30% or >=70%).
-3. For each eligible market, query LLM for impacted U.S. stocks/ETFs and direction if event resolves YES.
-4. Pull valuation/quote data for discovered tickers.
-5. Select the best-valuation ticker per market, score and rank ideas.
-6. Deduplicate alerts with MongoDB cooldown digest.
-7. Send Telegram message with rationale and ticker background.
+3. Build a wider passed pool, then choose a diversified set of 5 markets (LLM selector + deterministic fallback).
+4. For each selected market, query LLM for impacted U.S. stocks/ETFs and direction if event resolves YES.
+5. Pull valuation/quote data for discovered tickers.
+6. Select the best-valuation ticker per market, score and rank ideas.
+7. Deduplicate alerts with MongoDB cooldown digest.
+8. Send Telegram message with rationale and ticker background.
 
 ## Iteration 2 features
 - Websocket ingestion service for lower-latency updates:
@@ -39,6 +40,12 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 - `POLYMARKET_ONLY_MODE=true`
 - `FINANCE_ONLY_MODE=true`
 - `TOP_LIQUIDITY_FINANCE_MARKETS=5`
+- `FINANCE_PASSED_POOL_SIZE=60`
+- `DIVERSIFY_MARKETS=true`
+- `DIVERSIFY_MAX_PER_EVENT=1`
+- `DIVERSIFY_TEXT_SIMILARITY=0.72`
+- `LLM_SELECT_DIVERSE_MARKETS=true`
+- `LLM_MARKET_SELECTION_POOL=40`
 - `POLYMARKET_MIN_SCAN_MARKETS=2000`
 - `MIN_SIGNAL_LIQUIDITY=100000`
 - `PROBABILITY_LOW_THRESHOLD=0.30`
@@ -46,7 +53,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 - `MAX_MARKETS_FOR_LLM=5`
 - `LLM_MAP_MAX_TICKERS=8`
 - No fixed ticker universe is required; tickers are discovered per-market by the LLM.
-- Selection logic: scan finance markets by liquidity and return the first 5 that pass liquidity/probability filters.
+- Selection logic: rank by liquidity, pass gates on a wider pool, then select 5 diversified markets (not 5 variants of one parent event).
 - In finance mode, Polymarket scan depth is auto-raised to at least `POLYMARKET_MIN_SCAN_MARKETS`, so the agent does not stop after a shallow first page.
 
 These are set in `.env` and can be tuned without code changes.
@@ -71,6 +78,7 @@ docker compose up -d mongodb
 ```bash
 python3 -m prediction_agent.app --once --dry-run
 ```
+`--dry-run` skips Telegram delivery only; signal generation and valuation fetching still run.
 5. Run continuous polling:
 ```bash
 python3 -m prediction_agent.app

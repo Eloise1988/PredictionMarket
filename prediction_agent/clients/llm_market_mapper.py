@@ -67,6 +67,71 @@ class LLMMarketMapper:
             logger.warning("LLM market mapper failed: %s | q=%s", str(exc), signal.question[:180])
             return []
 
+    def select_diverse_markets(
+        self,
+        signals: List[PredictionSignal],
+        target_count: int,
+    ) -> List[str]:
+        if not self.enabled() or not signals or target_count <= 0:
+            return []
+
+        market_rows = []
+        for s in signals:
+            raw = s.raw or {}
+            market_rows.append(
+                {
+                    "market_id": s.market_id,
+                    "question": s.question,
+                    "liquidity": round(float(s.liquidity), 2),
+                    "prob_yes": round(float(s.prob_yes), 4),
+                    "event_title": str(raw.get("eventTitle") or ""),
+                    "event_slug": str(raw.get("eventSlug") or raw.get("slug") or ""),
+                }
+            )
+
+        system = (
+            "You are selecting a diverse subset of prediction markets for downstream stock-impact analysis. "
+            "Pick markets that are materially different events, avoid near-duplicate variants of the same parent event "
+            "(for example multiple candidate outcomes for one nomination race), and prefer higher-liquidity contracts. "
+            "Return strict JSON only with schema: {\"market_ids\":[\"id1\",\"id2\"]}. "
+            "Use only market_id values provided by user."
+        )
+        user = json.dumps(
+            {
+                "target_count": int(target_count),
+                "markets": market_rows,
+            },
+            separators=(",", ":"),
+        )
+
+        try:
+            response = self._client.responses.create(
+                model=self.model,
+                input=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            )
+            payload = _extract_json((response.output_text or "").strip())
+            ids = payload.get("market_ids", []) if isinstance(payload, dict) else []
+            if not isinstance(ids, list):
+                return []
+            allowed = {s.market_id for s in signals}
+            out: List[str] = []
+            seen: set[str] = set()
+            for raw_id in ids:
+                market_id = str(raw_id).strip()
+                if not market_id or market_id not in allowed or market_id in seen:
+                    continue
+                seen.add(market_id)
+                out.append(market_id)
+                if len(out) >= target_count:
+                    break
+            return out
+        except Exception as exc:
+            logger.warning("LLM market selector failed: %s", str(exc))
+            return []
+
 
 def _extract_json(text: str) -> dict:
     if not text:

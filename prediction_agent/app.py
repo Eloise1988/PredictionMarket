@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -121,9 +122,18 @@ class DecisionAgent:
                 logger.info("Gate detail | %s", row)
             return []
 
-        logger.info("Processing prediction signals (eligible=%s)", len(filtered_signals))
-        self._log_eligible_markets(filtered_signals)
-        self.store.save_signals(filtered_signals)
+        markets_for_llm = self._select_markets_for_mapping(filtered_signals)
+        if not markets_for_llm:
+            logger.info("No markets selected for LLM mapping after diversification")
+            return []
+
+        logger.info(
+            "Processing prediction signals (passed_pool=%s selected_for_mapping=%s)",
+            len(filtered_signals),
+            len(markets_for_llm),
+        )
+        self._log_eligible_markets(markets_for_llm)
+        self.store.save_signals(markets_for_llm)
 
         if not self.market_mapper.enabled():
             logger.warning("Market mapper disabled because OPENAI_API_KEY is missing")
@@ -132,11 +142,6 @@ class DecisionAgent:
         candidates_by_market: List[Tuple[PredictionSignal, List[MarketStockCandidate]]] = []
         tickers_to_load: set[str] = set()
 
-        if self.settings.finance_only_mode:
-            # Finance mode already stops at TOP_LIQUIDITY_FINANCE_MARKETS during filtering.
-            markets_for_llm = filtered_signals
-        else:
-            markets_for_llm = filtered_signals[: self.settings.max_markets_for_llm]
         for signal in markets_for_llm:
             candidates = self.market_mapper.map_market(
                 signal,
@@ -157,7 +162,7 @@ class DecisionAgent:
             self._log_market_samples(filtered_signals)
             return []
 
-        snapshots = self._load_equity_snapshots(sorted(tickers_to_load), dry_run=dry_run)
+        snapshots = self._load_equity_snapshots(sorted(tickers_to_load))
 
         ideas: List[CandidateIdea] = []
         for signal, candidates in candidates_by_market:
@@ -365,13 +370,115 @@ class DecisionAgent:
                 continue
 
             filtered.append(signal)
-            if self.settings.finance_only_mode and len(filtered) >= self.settings.top_liquidity_finance_markets:
+            if self.settings.finance_only_mode and len(filtered) >= self.settings.finance_passed_pool_size:
                 break
             if not self.settings.finance_only_mode and len(filtered) >= self.settings.max_signals_per_cycle:
                 break
 
         diag.passed = len(filtered)
         return filtered, diag
+
+    def _select_markets_for_mapping(self, passed_signals: List[PredictionSignal]) -> List[PredictionSignal]:
+        if not passed_signals:
+            return []
+
+        if not self.settings.finance_only_mode:
+            return passed_signals[: self.settings.max_markets_for_llm]
+
+        target = max(1, self.settings.top_liquidity_finance_markets)
+        pool = passed_signals[: max(target, self.settings.finance_passed_pool_size)]
+
+        selected: List[PredictionSignal] = []
+        if self.settings.llm_select_diverse_markets and self.market_mapper.enabled():
+            llm_pool = pool[: max(target, self.settings.llm_market_selection_pool)]
+            selected_ids = self.market_mapper.select_diverse_markets(llm_pool, target_count=target)
+            if selected_ids:
+                id_to_signal = {s.market_id: s for s in llm_pool}
+                for market_id in selected_ids:
+                    signal = id_to_signal.get(market_id)
+                    if signal is None:
+                        continue
+                    selected.append(signal)
+
+        selected_ids = {s.market_id for s in selected}
+        remaining = [s for s in pool if s.market_id not in selected_ids]
+
+        if len(selected) < target:
+            selected.extend(
+                self._select_diverse_markets_deterministic(
+                    remaining,
+                    target_count=target - len(selected),
+                    already_selected=selected,
+                )
+            )
+
+        if len(selected) < target:
+            selected_ids = {s.market_id for s in selected}
+            for signal in remaining:
+                if signal.market_id in selected_ids:
+                    continue
+                selected.append(signal)
+                selected_ids.add(signal.market_id)
+                if len(selected) >= target:
+                    break
+
+        logger.info(
+            "Market selection summary | passed_pool=%s pool_used=%s target=%s selected=%s llm_enabled=%s",
+            len(passed_signals),
+            len(pool),
+            target,
+            len(selected),
+            self.settings.llm_select_diverse_markets and self.market_mapper.enabled(),
+        )
+        return selected[:target]
+
+    def _select_diverse_markets_deterministic(
+        self,
+        signals: List[PredictionSignal],
+        target_count: int,
+        already_selected: List[PredictionSignal] | None = None,
+    ) -> List[PredictionSignal]:
+        if target_count <= 0:
+            return []
+
+        selected = list(already_selected or [])
+        event_counts: Dict[str, int] = {}
+        selected_token_sets: List[set[str]] = []
+        selected_ids = {s.market_id for s in selected}
+
+        for s in selected:
+            event_key = _event_group_key(s)
+            event_counts[event_key] = event_counts.get(event_key, 0) + 1
+            selected_token_sets.append(_question_token_set(s.question))
+
+        out: List[PredictionSignal] = []
+        for signal in signals:
+            if signal.market_id in selected_ids:
+                continue
+
+            if self.settings.diversify_markets:
+                event_key = _event_group_key(signal)
+                if event_counts.get(event_key, 0) >= max(1, self.settings.diversify_max_per_event):
+                    continue
+
+                tokens = _question_token_set(signal.question)
+                if tokens and selected_token_sets:
+                    max_sim = max(_jaccard_similarity(tokens, prior) for prior in selected_token_sets)
+                    if max_sim >= self.settings.diversify_text_similarity:
+                        continue
+
+            out.append(signal)
+            selected_ids.add(signal.market_id)
+
+            if self.settings.diversify_markets:
+                event_key = _event_group_key(signal)
+                event_counts[event_key] = event_counts.get(event_key, 0) + 1
+                selected_token_sets.append(_question_token_set(signal.question))
+
+            if len(out) >= target_count:
+                break
+
+        return out
 
     def _log_market_samples(self, signals: List[PredictionSignal]) -> None:
         sample = signals[:12]
@@ -408,16 +515,12 @@ class DecisionAgent:
             rows[:1000],
         )
 
-    def _load_equity_snapshots(self, tickers: List[str], dry_run: bool) -> Dict[str, EquitySnapshot]:
+    def _load_equity_snapshots(self, tickers: List[str]) -> Dict[str, EquitySnapshot]:
         snapshots: Dict[str, EquitySnapshot] = {}
         for ticker in tickers:
             cached = self.store.get_cached_equity(ticker, max_age_seconds=900)
             if cached:
                 snapshots[ticker] = cached
-                continue
-
-            # During dry-runs we avoid spending API quota.
-            if dry_run:
                 continue
 
             snap = self.alpha_vantage.fetch_snapshot(ticker)
@@ -515,6 +618,67 @@ def _is_finance_signal(signal: PredictionSignal) -> bool:
     if any(x in question for x in sports_terms):
         return False
     return any(x in question for x in finance_terms)
+
+
+def _event_group_key(signal: PredictionSignal) -> str:
+    raw = signal.raw or {}
+    base = (
+        str(raw.get("eventTitle") or "").strip()
+        or str(raw.get("eventSlug") or "").strip()
+        or str(raw.get("slug") or "").strip()
+        or signal.question
+    )
+    norm = re.sub(r"[^a-z0-9]+", " ", base.lower()).strip()
+    norm = re.sub(r"\s+", " ", norm)
+    return f"{signal.source}:{norm[:180]}"
+
+
+_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "will",
+    "before",
+    "after",
+    "into",
+    "from",
+    "that",
+    "this",
+    "have",
+    "has",
+    "had",
+    "are",
+    "was",
+    "were",
+    "would",
+    "could",
+    "should",
+    "about",
+    "next",
+    "than",
+    "over",
+    "under",
+    "between",
+    "more",
+    "less",
+    "year",
+}
+
+
+def _question_token_set(text: str) -> set[str]:
+    tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
+    return {t for t in tokens if len(t) > 2 and t not in _STOPWORDS}
+
+
+def _jaccard_similarity(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a.intersection(b))
+    union = len(a.union(b))
+    if union == 0:
+        return 0.0
+    return inter / union
 
 
 def _format_telegram_message(alert: AlertPayload) -> str:
