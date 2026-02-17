@@ -47,6 +47,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 - `LLM_SELECT_DIVERSE_MARKETS=true`
 - `LLM_MARKET_SELECTION_POOL=120`
 - `POLYMARKET_MIN_SCAN_MARKETS=2000`
+- `CROSS_VENUE_MIN_SIMILARITY=0.34`
 - `MIN_SIGNAL_LIQUIDITY=100000`
 - `PROBABILITY_LOW_THRESHOLD=0.30`
 - `PROBABILITY_HIGH_THRESHOLD=0.70`
@@ -83,6 +84,10 @@ python3 -m prediction_agent.app --once --dry-run
 Inspect full finance ranking table (by liquidity) with gate status:
 ```bash
 python3 -m prediction_agent.app --show-finance-table
+```
+Inspect cross-venue finance matches (Polymarket vs Kalshi), ranked by combined liquidity:
+```bash
+python3 -m prediction_agent.app --show-cross-venue-table
 ```
 5. Run continuous polling:
 ```bash

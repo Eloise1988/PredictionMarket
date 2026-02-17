@@ -16,6 +16,7 @@ from prediction_agent.config import get_settings
 from prediction_agent.connectors.kalshi import KalshiConnector
 from prediction_agent.connectors.polymarket import PolymarketConnector
 from prediction_agent.engine.consensus import aggregate_consensus
+from prediction_agent.engine.cross_venue import match_cross_venue_markets
 from prediction_agent.engine.portfolio_selector import select_top_ideas
 from prediction_agent.engine.valuation import clamp01, signal_quality, valuation_score
 from prediction_agent.knowledge.ticker_profiles import get_ticker_background
@@ -141,6 +142,56 @@ class DecisionAgent:
             len(dedup),
             len([s for s in ranked if _is_finance_signal(s)]),
             len(finance),
+        )
+
+    def show_cross_venue_table(self, limit: int = 0, min_similarity: float | None = None) -> None:
+        source_signals = self._fetch_cross_venue_signals()
+        polymarket_signals = [s for s in source_signals.get("polymarket", []) if _is_finance_signal(s)]
+        kalshi_signals = [s for s in source_signals.get("kalshi", []) if _is_finance_signal(s)]
+
+        if not polymarket_signals or not kalshi_signals:
+            logger.info(
+                "Cross-venue table unavailable | polymarket_finance=%s kalshi_finance=%s",
+                len(polymarket_signals),
+                len(kalshi_signals),
+            )
+            return
+
+        threshold = self.settings.cross_venue_min_similarity if min_similarity is None else min_similarity
+        matches = match_cross_venue_markets(
+            polymarket_signals=polymarket_signals,
+            kalshi_signals=kalshi_signals,
+            min_similarity=max(0.0, min(1.0, float(threshold))),
+        )
+        total_matches = len(matches)
+        if limit > 0:
+            matches = matches[:limit]
+
+        print(
+            "rank | liq_sum_usd | prob_pm | prob_kalshi | prob_diff_pp | sim | polymarket_id | kalshi_id | polymarket_question | kalshi_question"
+        )
+        print("-" * 220)
+        for idx, m in enumerate(matches, start=1):
+            print(
+                f"{idx:>4} | "
+                f"{m.liquidity_sum:>11.0f} | "
+                f"{m.polymarket.prob_yes*100:>7.2f}% | "
+                f"{m.kalshi.prob_yes*100:>10.2f}% | "
+                f"{m.probability_diff*100:>12.2f} | "
+                f"{m.text_similarity:>4.2f} | "
+                f"{m.polymarket.market_id:<12} | "
+                f"{m.kalshi.market_id:<14} | "
+                f"{(m.polymarket.question or '').strip()[:80]} | "
+                f"{(m.kalshi.question or '').strip()[:80]}"
+            )
+
+        logger.info(
+            "Cross-venue table complete | polymarket_finance=%s kalshi_finance=%s matches=%s shown=%s min_similarity=%.2f",
+            len(polymarket_signals),
+            len(kalshi_signals),
+            total_matches,
+            len(matches),
+            max(0.0, min(1.0, float(threshold))),
         )
 
     def process_signals(self, signals: List[PredictionSignal], dry_run: bool = False) -> List[CandidateIdea]:
@@ -357,6 +408,29 @@ class DecisionAgent:
                 )
 
         return all_signals
+
+    def _fetch_cross_venue_signals(self) -> Dict[str, List[PredictionSignal]]:
+        out: Dict[str, List[PredictionSignal]] = {"polymarket": [], "kalshi": []}
+
+        if self.settings.polymarket_enabled:
+            try:
+                connector = PolymarketConnector(
+                    gamma_base_url=self.settings.polymarket_gamma_base_url,
+                    clob_base_url=self.settings.polymarket_clob_base_url,
+                    limit=max(self.settings.polymarket_limit, self.settings.polymarket_min_scan_markets),
+                )
+                out["polymarket"] = connector.fetch_signals()
+            except Exception as exc:
+                logger.warning("Cross-venue fetch failed for polymarket", extra={"error": str(exc)})
+
+        if self.settings.kalshi_enabled:
+            try:
+                connector = KalshiConnector(base_url=self.settings.kalshi_base_url, limit=self.settings.kalshi_limit)
+                out["kalshi"] = connector.fetch_signals()
+            except Exception as exc:
+                logger.warning("Cross-venue fetch failed for kalshi", extra={"error": str(exc)})
+
+        return out
 
     def _apply_signal_filters(self, signals: List[PredictionSignal]) -> tuple[List[PredictionSignal], FilterDiagnostics]:
         diag = FilterDiagnostics(total_input=len(signals))
@@ -811,10 +885,21 @@ def main() -> None:
         help="Print finance markets ranked by liquidity with gate status, then exit",
     )
     parser.add_argument(
+        "--show-cross-venue-table",
+        action="store_true",
+        help="Print matched finance markets across Polymarket and Kalshi, ranked by combined liquidity",
+    )
+    parser.add_argument(
         "--table-limit",
         type=int,
         default=0,
         help="Optional max rows for --show-finance-table (0 = all)",
+    )
+    parser.add_argument(
+        "--cross-min-similarity",
+        type=float,
+        default=None,
+        help="Optional text-similarity threshold for cross-venue matching (0-1)",
     )
     args = parser.parse_args()
 
@@ -824,6 +909,10 @@ def main() -> None:
 
     if args.show_finance_table:
         agent.show_finance_table(limit=max(0, args.table_limit))
+        return
+
+    if args.show_cross_venue_table:
+        agent.show_cross_venue_table(limit=max(0, args.table_limit), min_similarity=args.cross_min_similarity)
         return
 
     if args.once:

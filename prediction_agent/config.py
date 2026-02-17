@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     llm_select_diverse_markets: bool = Field(default=True, alias="LLM_SELECT_DIVERSE_MARKETS")
     llm_market_selection_pool: int = Field(default=120, alias="LLM_MARKET_SELECTION_POOL")
     polymarket_min_scan_markets: int = Field(default=2000, alias="POLYMARKET_MIN_SCAN_MARKETS")
+    cross_venue_min_similarity: float = Field(default=0.34, alias="CROSS_VENUE_MIN_SIMILARITY")
     enable_probability_gate: bool = Field(default=True, alias="ENABLE_PROBABILITY_GATE")
     max_markets_for_llm: int = Field(default=40, alias="MAX_MARKETS_FOR_LLM")
     llm_map_max_tickers: int = Field(default=8, alias="LLM_MAP_MAX_TICKERS")
