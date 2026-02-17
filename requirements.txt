@@ -1,0 +1,8 @@
+openai>=1.51.0
+pydantic>=2.9.2
+pydantic-settings>=2.5.2
+pymongo[srv]>=4.10.1
+requests>=2.32.3
+tenacity>=9.0.0
+python-dotenv>=1.0.1
+websockets>=12.0

@@ -1,0 +1,54 @@
+{
+  "us_iran_conflict": {
+    "keywords": ["iran", "us strike", "u.s. strike", "war", "middle east", "hormuz", "tehran"],
+    "equities": [
+      {"ticker": "LMT", "direction": "long", "weight": 1.0},
+      {"ticker": "RTX", "direction": "long", "weight": 0.95},
+      {"ticker": "NOC", "direction": "long", "weight": 0.92},
+      {"ticker": "GD", "direction": "long", "weight": 0.9},
+      {"ticker": "HII", "direction": "long", "weight": 0.82},
+      {"ticker": "XOM", "direction": "long", "weight": 0.72},
+      {"ticker": "CVX", "direction": "long", "weight": 0.7},
+      {"ticker": "DAL", "direction": "short", "weight": 0.45}
+    ]
+  },
+  "global_oil_supply_shock": {
+    "keywords": ["oil", "opec", "hormuz", "supply shock", "sanctions", "pipeline"],
+    "equities": [
+      {"ticker": "XLE", "direction": "long", "weight": 1.0},
+      {"ticker": "XOM", "direction": "long", "weight": 0.92},
+      {"ticker": "CVX", "direction": "long", "weight": 0.9},
+      {"ticker": "MPC", "direction": "long", "weight": 0.74},
+      {"ticker": "DAL", "direction": "short", "weight": 0.55},
+      {"ticker": "UAL", "direction": "short", "weight": 0.52}
+    ]
+  },
+  "us_china_taiwan_tension": {
+    "keywords": ["taiwan", "china", "south china sea", "invasion", "blockade"],
+    "equities": [
+      {"ticker": "LMT", "direction": "long", "weight": 0.85},
+      {"ticker": "NOC", "direction": "long", "weight": 0.82},
+      {"ticker": "SMH", "direction": "short", "weight": 0.5},
+      {"ticker": "NVDA", "direction": "short", "weight": 0.35},
+      {"ticker": "AAPL", "direction": "short", "weight": 0.32}
+    ]
+  },
+  "fed_rate_cut_cycle": {
+    "keywords": ["fed", "interest rate", "rate cut", "fomc", "easing"],
+    "equities": [
+      {"ticker": "QQQ", "direction": "long", "weight": 0.75},
+      {"ticker": "IWM", "direction": "long", "weight": 0.72},
+      {"ticker": "TLT", "direction": "long", "weight": 0.7},
+      {"ticker": "KRE", "direction": "short", "weight": 0.35}
+    ]
+  },
+  "us_recession_risk": {
+    "keywords": ["recession", "gdp contraction", "jobless", "unemployment spike"],
+    "equities": [
+      {"ticker": "XLP", "direction": "long", "weight": 0.62},
+      {"ticker": "XLU", "direction": "long", "weight": 0.58},
+      {"ticker": "XLY", "direction": "short", "weight": 0.62},
+      {"ticker": "IWM", "direction": "short", "weight": 0.55}
+    ]
+  }
+}

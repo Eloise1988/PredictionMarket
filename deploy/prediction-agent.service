@@ -1,0 +1,16 @@
+[Unit]
+Description=Prediction Market Equity Signal Agent
+After=network.target mongod.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/prediction-agent
+EnvironmentFile=/opt/prediction-agent/.env
+ExecStart=/opt/prediction-agent/.venv/bin/python -m prediction_agent.app
+Restart=always
+RestartSec=5
+User=ubuntu
+Group=ubuntu
+
+[Install]
+WantedBy=multi-user.target
