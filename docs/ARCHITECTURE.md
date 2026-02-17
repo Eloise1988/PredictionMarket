@@ -3,12 +3,12 @@
 ```mermaid
 flowchart LR
     A[Polymarket API] --> D[Signal Normalizer]
-    B[Kalshi API] --> D
+    B[Kalshi API (optional)] --> D
     A2[Polymarket WS] --> D
     B2[Kalshi WS] --> D
-    D --> E[Theme Matcher]
-    E --> F[Event-Equity Exposure Map]
-    F --> G[Scoring Engine]
+    D --> E[Liquidity + Probability Gates]
+    E --> F[LLM Market-to-Stock Mapper]
+    F --> G[Valuation + Scoring Engine]
     C[Alpha Vantage API] --> G
     G --> H[Portfolio Selector]
     H --> I[MongoDB]

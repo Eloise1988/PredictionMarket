@@ -1,54 +1,162 @@
 {
   "us_iran_conflict": {
-    "keywords": ["iran", "us strike", "u.s. strike", "war", "middle east", "hormuz", "tehran"],
-    "equities": [
-      {"ticker": "LMT", "direction": "long", "weight": 1.0},
-      {"ticker": "RTX", "direction": "long", "weight": 0.95},
-      {"ticker": "NOC", "direction": "long", "weight": 0.92},
-      {"ticker": "GD", "direction": "long", "weight": 0.9},
-      {"ticker": "HII", "direction": "long", "weight": 0.82},
-      {"ticker": "XOM", "direction": "long", "weight": 0.72},
-      {"ticker": "CVX", "direction": "long", "weight": 0.7},
-      {"ticker": "DAL", "direction": "short", "weight": 0.45}
-    ]
+    "keywords": [
+      "iran",
+      "tehran",
+      "us strike",
+      "u.s. strike",
+      "military strike",
+      "middle east conflict",
+      "hormuz",
+      "iran sanctions"
+    ],
+    "equities": []
   },
   "global_oil_supply_shock": {
-    "keywords": ["oil", "opec", "hormuz", "supply shock", "sanctions", "pipeline"],
-    "equities": [
-      {"ticker": "XLE", "direction": "long", "weight": 1.0},
-      {"ticker": "XOM", "direction": "long", "weight": 0.92},
-      {"ticker": "CVX", "direction": "long", "weight": 0.9},
-      {"ticker": "MPC", "direction": "long", "weight": 0.74},
-      {"ticker": "DAL", "direction": "short", "weight": 0.55},
-      {"ticker": "UAL", "direction": "short", "weight": 0.52}
-    ]
+    "keywords": [
+      "oil supply shock",
+      "crude supply shock",
+      "opec",
+      "opec+",
+      "hormuz closure",
+      "pipeline disruption",
+      "energy sanctions",
+      "brent above"
+    ],
+    "equities": []
   },
   "us_china_taiwan_tension": {
-    "keywords": ["taiwan", "china", "south china sea", "invasion", "blockade"],
-    "equities": [
-      {"ticker": "LMT", "direction": "long", "weight": 0.85},
-      {"ticker": "NOC", "direction": "long", "weight": 0.82},
-      {"ticker": "SMH", "direction": "short", "weight": 0.5},
-      {"ticker": "NVDA", "direction": "short", "weight": 0.35},
-      {"ticker": "AAPL", "direction": "short", "weight": 0.32}
-    ]
+    "keywords": [
+      "taiwan",
+      "taiwan strait",
+      "south china sea",
+      "china blockade",
+      "china invasion",
+      "cross strait conflict"
+    ],
+    "equities": []
   },
   "fed_rate_cut_cycle": {
-    "keywords": ["fed", "interest rate", "rate cut", "fomc", "easing"],
-    "equities": [
-      {"ticker": "QQQ", "direction": "long", "weight": 0.75},
-      {"ticker": "IWM", "direction": "long", "weight": 0.72},
-      {"ticker": "TLT", "direction": "long", "weight": 0.7},
-      {"ticker": "KRE", "direction": "short", "weight": 0.35}
-    ]
+    "keywords": [
+      "fed cut",
+      "fed rate cut",
+      "fomc cut",
+      "interest rate cut",
+      "interest rates",
+      "policy easing",
+      "fed easing",
+      "lower rates"
+    ],
+    "equities": []
+  },
+  "fed_rate_hike_cycle": {
+    "keywords": [
+      "fed hike",
+      "fed rate hike",
+      "fomc hike",
+      "interest rate hike",
+      "interest rates",
+      "policy tightening",
+      "higher for longer",
+      "hawkish fed"
+    ],
+    "equities": []
   },
   "us_recession_risk": {
-    "keywords": ["recession", "gdp contraction", "jobless", "unemployment spike"],
-    "equities": [
-      {"ticker": "XLP", "direction": "long", "weight": 0.62},
-      {"ticker": "XLU", "direction": "long", "weight": 0.58},
-      {"ticker": "XLY", "direction": "short", "weight": 0.62},
-      {"ticker": "IWM", "direction": "short", "weight": 0.55}
-    ]
+    "keywords": [
+      "recession",
+      "gdp contraction",
+      "hard landing",
+      "unemployment spike",
+      "jobless claims surge",
+      "economic slowdown"
+    ],
+    "equities": []
+  },
+  "us_disinflation_soft_landing": {
+    "keywords": [
+      "disinflation",
+      "cpi below",
+      "pce below",
+      "soft landing",
+      "inflation cooling",
+      "inflation downtrend"
+    ],
+    "equities": []
+  },
+  "us_inflation_reacceleration": {
+    "keywords": [
+      "inflation reaccelerates",
+      "cpi above",
+      "pce above",
+      "sticky inflation",
+      "services inflation",
+      "inflation surprise"
+    ],
+    "equities": []
+  },
+  "us_fiscal_stimulus": {
+    "keywords": [
+      "fiscal stimulus",
+      "infrastructure package",
+      "spending package",
+      "budget deal",
+      "government spending bill"
+    ],
+    "equities": []
+  },
+  "us_government_shutdown_risk": {
+    "keywords": [
+      "government shutdown",
+      "continuing resolution fails",
+      "debt ceiling standoff",
+      "federal shutdown",
+      "appropriations deadlock"
+    ],
+    "equities": []
+  },
+  "us_china_tariff_escalation": {
+    "keywords": [
+      "tariff escalation",
+      "new tariffs",
+      "tariff increase",
+      "trade war",
+      "import tariffs",
+      "china tariffs",
+      "export controls"
+    ],
+    "equities": []
+  },
+  "ai_capex_boom": {
+    "keywords": [
+      "ai capex",
+      "data center spending",
+      "cloud capex",
+      "ai infrastructure",
+      "gpu demand",
+      "semiconductor demand"
+    ],
+    "equities": []
+  },
+  "credit_stress_event": {
+    "keywords": [
+      "credit event",
+      "bank stress",
+      "bank run",
+      "commercial real estate stress",
+      "default wave",
+      "credit spread widening"
+    ],
+    "equities": []
+  },
+  "cybersecurity_incident": {
+    "keywords": [
+      "cyber attack",
+      "ransomware",
+      "critical infrastructure cyber",
+      "major data breach",
+      "cybersecurity emergency"
+    ],
+    "equities": []
   }
 }

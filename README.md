@@ -1,6 +1,6 @@
 # Prediction Market -> Equity Signal Agent
 
-Decision-support agent that ingests prediction market data (Polymarket + Kalshi), maps high-conviction events to exposed equities, scores potential long/short ideas, stores everything in MongoDB, and sends Telegram alerts.
+Decision-support agent that ingests prediction market data, filters high-liquidity/high-conviction contracts, uses an LLM to discover impacted stocks per market dynamically, ranks by valuation fit, and sends Telegram alerts.
 
 ## What this is
 - Real-time monitoring and ranking of *potentially impacted* stocks.
@@ -8,14 +8,13 @@ Decision-support agent that ingests prediction market data (Polymarket + Kalshi)
 - Built for Ubuntu 20 + MongoDB + OpenAI API + Telegram Bot API.
 
 ## Core flow
-1. Fetch open markets from Polymarket and Kalshi.
-2. Normalize to event probabilities and liquidity/volume quality.
-3. Match event text to pre-defined macro/geopolitical themes.
-4. Map each theme to exposed equities with direction and weight.
-5. Pull valuation + quote data (Alpha Vantage) for scoring.
-6. Aggregate cross-market consensus and rank/diversify ideas.
-7. Deduplicate alerts with MongoDB cooldown digest.
-8. Send Telegram message with concise rationale.
+1. Fetch open markets (default: Polymarket-wide scan).
+2. Keep only markets above liquidity threshold and with extreme probabilities (default <=30% or >=70%).
+3. For each eligible market, query LLM for impacted U.S. stocks/ETFs and direction if event resolves YES.
+4. Pull valuation/quote data for discovered tickers.
+5. Select the best-valuation ticker per market, score and rank ideas.
+6. Deduplicate alerts with MongoDB cooldown digest.
+7. Send Telegram message with rationale and ticker background.
 
 ## Iteration 2 features
 - Websocket ingestion service for lower-latency updates:
@@ -35,6 +34,17 @@ python3 -m prediction_agent.backtest.runner --start 2025-01-01 --end 2025-12-31 
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 - Company/ETF background lines are included in alert output and LLM-ranked ideas for clearer rationale.
+
+## Dynamic mapping knobs
+- `POLYMARKET_ONLY_MODE=true`
+- `MIN_SIGNAL_LIQUIDITY=100000`
+- `PROBABILITY_LOW_THRESHOLD=0.30`
+- `PROBABILITY_HIGH_THRESHOLD=0.70`
+- `MAX_MARKETS_FOR_LLM=40`
+- `LLM_MAP_MAX_TICKERS=8`
+- No fixed ticker universe is required; tickers are discovered per-market by the LLM.
+
+These are set in `.env` and can be tuned without code changes.
 
 ## Quick start (local)
 1. Create environment and install dependencies:

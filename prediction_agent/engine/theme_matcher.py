@@ -25,8 +25,6 @@ _SPORTS_OR_ENTERTAINMENT_TERMS = (
     "grand slam",
     "tournament",
     "playoff",
-    "match",
-    "goal",
 )
 
 _THEME_REQUIRE_ANY: Dict[str, Tuple[Tuple[str, ...], ...]] = {

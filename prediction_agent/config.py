@@ -18,7 +18,7 @@ class Settings(BaseSettings):
         default="https://gamma-api.polymarket.com", alias="POLYMARKET_GAMMA_BASE_URL"
     )
     polymarket_clob_base_url: str = Field(default="https://clob.polymarket.com", alias="POLYMARKET_CLOB_BASE_URL")
-    polymarket_limit: int = Field(default=200, alias="POLYMARKET_LIMIT")
+    polymarket_limit: int = Field(default=1000, alias="POLYMARKET_LIMIT")
 
     kalshi_enabled: bool = Field(default=True, alias="KALSHI_ENABLED")
     kalshi_base_url: str = Field(default="https://api.elections.kalshi.com/trade-api/v2", alias="KALSHI_BASE_URL")
@@ -37,11 +37,17 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="gpt-5-mini", alias="OPENAI_MODEL")
     openai_timeout_seconds: int = Field(default=20, alias="OPENAI_TIMEOUT_SECONDS")
 
-    max_signals_per_cycle: int = Field(default=150, alias="MAX_SIGNALS_PER_CYCLE")
+    max_signals_per_cycle: int = Field(default=300, alias="MAX_SIGNALS_PER_CYCLE")
     strict_theme_filter: bool = Field(default=True, alias="STRICT_THEME_FILTER")
-    min_signal_liquidity: float = Field(default=10000.0, alias="MIN_SIGNAL_LIQUIDITY")
-    min_signal_volume_24h: float = Field(default=5000.0, alias="MIN_SIGNAL_VOLUME_24H")
-    min_probability_edge: float = Field(default=0.10, alias="MIN_PROBABILITY_EDGE")
+    min_signal_liquidity: float = Field(default=100000.0, alias="MIN_SIGNAL_LIQUIDITY")
+    min_signal_volume_24h: float = Field(default=0.0, alias="MIN_SIGNAL_VOLUME_24H")
+    min_probability_edge: float = Field(default=0.40, alias="MIN_PROBABILITY_EDGE")
+    probability_low_threshold: float = Field(default=0.30, alias="PROBABILITY_LOW_THRESHOLD")
+    probability_high_threshold: float = Field(default=0.70, alias="PROBABILITY_HIGH_THRESHOLD")
+    polymarket_only_mode: bool = Field(default=True, alias="POLYMARKET_ONLY_MODE")
+    max_markets_for_llm: int = Field(default=40, alias="MAX_MARKETS_FOR_LLM")
+    llm_map_max_tickers: int = Field(default=8, alias="LLM_MAP_MAX_TICKERS")
+    llm_min_linkage_score: float = Field(default=0.35, alias="LLM_MIN_LINKAGE_SCORE")
 
     streaming_enabled: bool = Field(default=False, alias="STREAMING_ENABLED")
     streaming_batch_seconds: int = Field(default=20, alias="STREAMING_BATCH_SECONDS")
