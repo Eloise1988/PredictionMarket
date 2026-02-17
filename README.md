@@ -80,6 +80,10 @@ docker compose up -d mongodb
 python3 -m prediction_agent.app --once --dry-run
 ```
 `--dry-run` skips Telegram delivery only; signal generation and valuation fetching still run.
+Inspect full finance ranking table (by liquidity) with gate status:
+```bash
+python3 -m prediction_agent.app --show-finance-table
+```
 5. Run continuous polling:
 ```bash
 python3 -m prediction_agent.app

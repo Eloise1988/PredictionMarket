@@ -98,6 +98,51 @@ class DecisionAgent:
 
         return self.process_signals(signals, dry_run=dry_run)
 
+    def show_finance_table(self, limit: int = 0) -> None:
+        signals = self._fetch_signals()
+        if not signals:
+            logger.info("No prediction signals fetched")
+            return
+
+        dedup: Dict[str, PredictionSignal] = {}
+        for signal in signals:
+            if self.settings.polymarket_only_mode and signal.source != "polymarket":
+                continue
+            key = f"{signal.source}:{signal.market_id}"
+            existing = dedup.get(key)
+            if existing is None or signal.updated_at > existing.updated_at:
+                dedup[key] = signal
+
+        ranked = sorted(dedup.values(), key=lambda s: (s.liquidity, s.volume_24h), reverse=True)
+        finance = [s for s in ranked if _is_finance_signal(s)]
+        if limit > 0:
+            finance = finance[:limit]
+
+        print(
+            "rank | liq_usd | vol24h_usd | prob_yes | gate | source | market_id | question"
+        )
+        print("-" * 180)
+        for idx, s in enumerate(finance, start=1):
+            gate = self._gate_reason(s)
+            print(
+                f"{idx:>4} | "
+                f"{s.liquidity:>10.0f} | "
+                f"{s.volume_24h:>10.0f} | "
+                f"{s.prob_yes*100:>7.2f}% | "
+                f"{gate:<11} | "
+                f"{s.source:<10} | "
+                f"{s.market_id:<12} | "
+                f"{(s.question or '').strip()[:160]}"
+            )
+
+        logger.info(
+            "Finance table complete | total_input=%s source_filtered=%s finance_ranked=%s shown=%s",
+            len(signals),
+            len(dedup),
+            len([s for s in ranked if _is_finance_signal(s)]),
+            len(finance),
+        )
+
     def process_signals(self, signals: List[PredictionSignal], dry_run: bool = False) -> List[CandidateIdea]:
         if not signals:
             return []
@@ -340,24 +385,7 @@ class DecisionAgent:
 
         filtered: List[PredictionSignal] = []
         for signal in candidates:
-            reason = "passed"
-            if signal.liquidity < self.settings.min_signal_liquidity:
-                diag.rejected_liquidity += 1
-                reason = "liquidity"
-            elif signal.volume_24h < self.settings.min_signal_volume_24h:
-                diag.rejected_volume += 1
-                reason = "volume"
-
-            if reason == "passed" and self.settings.enable_probability_gate:
-                p = signal.prob_yes
-                if not (p <= self.settings.probability_low_threshold or p >= self.settings.probability_high_threshold):
-                    diag.rejected_probability += 1
-                    reason = "probability"
-                else:
-                    edge = abs(p - 0.5) * 2
-                    if edge < self.settings.min_probability_edge:
-                        diag.rejected_edge += 1
-                        reason = "edge"
+            reason = self._gate_reason(signal, diag=diag)
 
             if len(diag.sample_rows) < 30:
                 diag.sample_rows.append(
@@ -377,6 +405,30 @@ class DecisionAgent:
 
         diag.passed = len(filtered)
         return filtered, diag
+
+    def _gate_reason(self, signal: PredictionSignal, diag: FilterDiagnostics | None = None) -> str:
+        if signal.liquidity < self.settings.min_signal_liquidity:
+            if diag is not None:
+                diag.rejected_liquidity += 1
+            return "liquidity"
+        if signal.volume_24h < self.settings.min_signal_volume_24h:
+            if diag is not None:
+                diag.rejected_volume += 1
+            return "volume"
+
+        if self.settings.enable_probability_gate:
+            p = signal.prob_yes
+            if not (p <= self.settings.probability_low_threshold or p >= self.settings.probability_high_threshold):
+                if diag is not None:
+                    diag.rejected_probability += 1
+                return "probability"
+            edge = abs(p - 0.5) * 2
+            if edge < self.settings.min_probability_edge:
+                if diag is not None:
+                    diag.rejected_edge += 1
+                return "edge"
+
+        return "passed"
 
     def _select_markets_for_mapping(self, passed_signals: List[PredictionSignal]) -> List[PredictionSignal]:
         if not passed_signals:
@@ -753,11 +805,26 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prediction market equity signal agent")
     parser.add_argument("--once", action="store_true", help="Run a single decision cycle")
     parser.add_argument("--dry-run", action="store_true", help="Do not send Telegram message")
+    parser.add_argument(
+        "--show-finance-table",
+        action="store_true",
+        help="Print finance markets ranked by liquidity with gate status, then exit",
+    )
+    parser.add_argument(
+        "--table-limit",
+        type=int,
+        default=0,
+        help="Optional max rows for --show-finance-table (0 = all)",
+    )
     args = parser.parse_args()
 
     settings = get_settings()
     configure_logging(settings.log_level)
     agent = DecisionAgent()
+
+    if args.show_finance_table:
+        agent.show_finance_table(limit=max(0, args.table_limit))
+        return
 
     if args.once:
         ideas = agent.run_cycle(dry_run=args.dry_run)
