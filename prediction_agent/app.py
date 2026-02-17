@@ -399,6 +399,18 @@ class DecisionAgent:
                     if signal is None:
                         continue
                     selected.append(signal)
+                logger.info(
+                    "LLM market selector raw picks | count=%s ids=%s",
+                    len(selected),
+                    ",".join(s.market_id for s in selected)[:1000],
+                )
+
+        if self.settings.diversify_markets and selected:
+            selected = self._select_diverse_markets_deterministic(
+                selected,
+                target_count=len(selected),
+                already_selected=[],
+            )
 
         selected_ids = {s.market_id for s in selected}
         remaining = [s for s in pool if s.market_id not in selected_ids]
@@ -561,17 +573,12 @@ def _is_finance_signal(signal: PredictionSignal) -> bool:
             str(raw.get("eventCategory") or ""),
             str(raw.get("subCategory") or ""),
             str(raw.get("eventTitle") or ""),
+            str(raw.get("eventSlug") or ""),
+            str(raw.get("slug") or ""),
             " ".join(str(x) for x in raw.get("tags", []) if isinstance(x, str)),
         ]
     ).lower()
     question = (signal.question or "").lower()
-
-    # If category metadata exists, trust it first.
-    if raw_text.strip():
-        if any(x in raw_text for x in ("sports", "entertainment", "pop-culture", "epl", "nba", "nfl", "nhl", "mlb")):
-            return False
-        if any(x in raw_text for x in ("finance", "markets", "economy", "business", "crypto", "macro")):
-            return True
 
     finance_terms = (
         "fed",
@@ -602,6 +609,12 @@ def _is_finance_signal(signal: PredictionSignal) -> bool:
     sports_terms = (
         "world cup",
         "fifa",
+        "premier league",
+        "english premier league",
+        "la liga",
+        "serie a",
+        "bundesliga",
+        "division",
         "stanley cup",
         "nba",
         "nfl",
@@ -613,11 +626,41 @@ def _is_finance_signal(signal: PredictionSignal) -> bool:
         "tournament",
         "playoff",
         "match",
+        "soccer",
+        "football club",
+        "wins the",
+        "win the",
+        "to win the",
+        "championship",
     )
 
-    if any(x in question for x in sports_terms):
+    # Hard reject sports-like contracts even if metadata is noisy.
+    if any(x in raw_text for x in sports_terms) or any(x in question for x in sports_terms):
         return False
-    return any(x in question for x in finance_terms)
+
+    # If category metadata exists, trust explicit finance tags.
+    if raw_text.strip() and any(
+        x in raw_text for x in ("finance", "markets", "economy", "business", "crypto", "macro", "rates", "inflation")
+    ):
+        return True
+
+    if any(x in question for x in finance_terms):
+        return True
+
+    if _looks_like_competition_market(question):
+        return False
+
+    return False
+
+
+def _looks_like_competition_market(question: str) -> bool:
+    q = (question or "").lower()
+    return bool(
+        re.search(r"\bwin\b.*\b(league|cup|division|title|championship)\b", q)
+        or re.search(r"\b(beat|defeat)\b", q)
+        or "vs " in q
+        or " versus " in q
+    )
 
 
 def _event_group_key(signal: PredictionSignal) -> str:

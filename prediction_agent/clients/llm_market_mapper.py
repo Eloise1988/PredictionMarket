@@ -76,16 +76,21 @@ class LLMMarketMapper:
             return []
 
         market_rows = []
-        for s in signals:
+        for rank, s in enumerate(signals, start=1):
             raw = s.raw or {}
             market_rows.append(
                 {
+                    "rank_by_liquidity": rank,
                     "market_id": s.market_id,
                     "question": s.question,
                     "liquidity": round(float(s.liquidity), 2),
                     "prob_yes": round(float(s.prob_yes), 4),
                     "event_title": str(raw.get("eventTitle") or ""),
                     "event_slug": str(raw.get("eventSlug") or raw.get("slug") or ""),
+                    "category": str(raw.get("category") or ""),
+                    "event_category": str(raw.get("eventCategory") or ""),
+                    "sub_category": str(raw.get("subCategory") or ""),
+                    "tags": [str(x) for x in raw.get("tags", []) if isinstance(x, str)][:8],
                 }
             )
 
@@ -93,6 +98,8 @@ class LLMMarketMapper:
             "You are selecting a diverse subset of prediction markets for downstream stock-impact analysis. "
             "Pick markets that are materially different events, avoid near-duplicate variants of the same parent event "
             "(for example multiple candidate outcomes for one nomination race), and prefer higher-liquidity contracts. "
+            "Hard constraints: select only finance/macro/economy/markets-related contracts; avoid sports/entertainment contracts. "
+            "Select at most one contract per parent event/event_slug/event_title family. "
             "Return strict JSON only with schema: {\"market_ids\":[\"id1\",\"id2\"]}. "
             "Use only market_id values provided by user."
         )

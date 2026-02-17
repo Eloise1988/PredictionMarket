@@ -45,7 +45,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 - `DIVERSIFY_MAX_PER_EVENT=1`
 - `DIVERSIFY_TEXT_SIMILARITY=0.72`
 - `LLM_SELECT_DIVERSE_MARKETS=true`
-- `LLM_MARKET_SELECTION_POOL=40`
+- `LLM_MARKET_SELECTION_POOL=120`
 - `POLYMARKET_MIN_SCAN_MARKETS=2000`
 - `MIN_SIGNAL_LIQUIDITY=100000`
 - `PROBABILITY_LOW_THRESHOLD=0.30`
@@ -54,6 +54,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 - `LLM_MAP_MAX_TICKERS=8`
 - No fixed ticker universe is required; tickers are discovered per-market by the LLM.
 - Selection logic: rank by liquidity, pass gates on a wider pool, then select 5 diversified markets (not 5 variants of one parent event).
+- The LLM market-selection input is a ranked table (by liquidity) from a wider pool, and diversity constraints are re-applied deterministically after LLM picks.
 - In finance mode, Polymarket scan depth is auto-raised to at least `POLYMARKET_MIN_SCAN_MARKETS`, so the agent does not stop after a shallow first page.
 
 These are set in `.env` and can be tuned without code changes.
