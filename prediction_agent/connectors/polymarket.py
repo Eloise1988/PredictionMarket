@@ -68,6 +68,11 @@ class PolymarketConnector(PredictionConnector):
                             "slug": slug,
                             "eventSlug": event_slug,
                             "endDate": market.get("endDate"),
+                            "category": market.get("category"),
+                            "eventCategory": market.get("eventCategory"),
+                            "subCategory": market.get("subCategory"),
+                            "eventTitle": market.get("eventTitle"),
+                            "tags": _extract_tags(market.get("tags")),
                             "probability_source": prob_source,
                             "outcomes": market.get("outcomes"),
                             "outcomePrices": market.get("outcomePrices"),
@@ -155,3 +160,21 @@ def _parse_dt(raw: Any) -> datetime:
         except ValueError:
             pass
     return datetime.now(timezone.utc)
+
+
+def _extract_tags(raw_tags: Any) -> List[str]:
+    if not raw_tags:
+        return []
+    if isinstance(raw_tags, list):
+        out: List[str] = []
+        for item in raw_tags:
+            if isinstance(item, str):
+                out.append(item.strip())
+            elif isinstance(item, dict):
+                for key in ("slug", "name", "label", "tag"):
+                    value = item.get(key)
+                    if isinstance(value, str) and value.strip():
+                        out.append(value.strip())
+                        break
+        return [x for x in out if x]
+    return []

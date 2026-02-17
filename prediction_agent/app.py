@@ -276,24 +276,26 @@ class DecisionAgent:
             reverse=True,
         )
 
-        filtered: List[PredictionSignal] = []
-        for signal in ranked:
-            p = signal.prob_yes
-            if not (p <= self.settings.probability_low_threshold or p >= self.settings.probability_high_threshold):
-                continue
+        finance_ranked = [s for s in ranked if (not self.settings.finance_only_mode) or _is_finance_signal(s)]
+        if self.settings.finance_only_mode:
+            finance_ranked = finance_ranked[: self.settings.top_liquidity_finance_markets]
 
+        filtered: List[PredictionSignal] = []
+        for signal in finance_ranked:
             if signal.liquidity < self.settings.min_signal_liquidity:
                 continue
-
             if signal.volume_24h < self.settings.min_signal_volume_24h:
                 continue
 
-            edge = abs(p - 0.5) * 2
-            if edge < self.settings.min_probability_edge:
-                continue
+            if self.settings.enable_probability_gate:
+                p = signal.prob_yes
+                if not (p <= self.settings.probability_low_threshold or p >= self.settings.probability_high_threshold):
+                    continue
+                edge = abs(p - 0.5) * 2
+                if edge < self.settings.min_probability_edge:
+                    continue
 
             filtered.append(signal)
-
             if len(filtered) >= self.settings.max_signals_per_cycle:
                 break
 
@@ -351,6 +353,73 @@ def _has_valuation_metrics(snapshot: EquitySnapshot | None) -> bool:
             snapshot.ev_to_ebitda,
         )
     )
+
+
+def _is_finance_signal(signal: PredictionSignal) -> bool:
+    raw = signal.raw or {}
+    raw_text = " ".join(
+        [
+            str(raw.get("category") or ""),
+            str(raw.get("eventCategory") or ""),
+            str(raw.get("subCategory") or ""),
+            str(raw.get("eventTitle") or ""),
+            " ".join(str(x) for x in raw.get("tags", []) if isinstance(x, str)),
+        ]
+    ).lower()
+    question = (signal.question or "").lower()
+
+    # If category metadata exists, trust it first.
+    if raw_text.strip():
+        if any(x in raw_text for x in ("sports", "entertainment", "pop-culture", "epl", "nba", "nfl", "nhl", "mlb")):
+            return False
+        if any(x in raw_text for x in ("finance", "markets", "economy", "business", "crypto", "macro")):
+            return True
+
+    finance_terms = (
+        "fed",
+        "fomc",
+        "interest rate",
+        "inflation",
+        "cpi",
+        "pce",
+        "gdp",
+        "recession",
+        "treasury",
+        "yield",
+        "stock",
+        "s&p",
+        "nasdaq",
+        "dow",
+        "bitcoin",
+        "ethereum",
+        "crypto",
+        "oil",
+        "brent",
+        "wti",
+        "earnings",
+        "tariff",
+        "unemployment",
+        "jobless",
+    )
+    sports_terms = (
+        "world cup",
+        "fifa",
+        "stanley cup",
+        "nba",
+        "nfl",
+        "mlb",
+        "nhl",
+        "super bowl",
+        "olympic",
+        "champions league",
+        "tournament",
+        "playoff",
+        "match",
+    )
+
+    if any(x in question for x in sports_terms):
+        return False
+    return any(x in question for x in finance_terms)
 
 
 def _format_telegram_message(alert: AlertPayload) -> str:

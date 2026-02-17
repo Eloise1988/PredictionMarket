@@ -37,10 +37,12 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 
 ## Dynamic mapping knobs
 - `POLYMARKET_ONLY_MODE=true`
+- `FINANCE_ONLY_MODE=true`
+- `TOP_LIQUIDITY_FINANCE_MARKETS=5`
 - `MIN_SIGNAL_LIQUIDITY=100000`
 - `PROBABILITY_LOW_THRESHOLD=0.30`
 - `PROBABILITY_HIGH_THRESHOLD=0.70`
-- `MAX_MARKETS_FOR_LLM=40`
+- `MAX_MARKETS_FOR_LLM=5`
 - `LLM_MAP_MAX_TICKERS=8`
 - No fixed ticker universe is required; tickers are discovered per-market by the LLM.
 

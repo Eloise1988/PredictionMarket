@@ -64,7 +64,7 @@ class LLMMarketMapper:
             payload = _extract_json(raw_text)
             return _parse_candidates(payload, max_tickers=max_tickers, min_linkage_score=min_linkage_score)
         except Exception as exc:
-            logger.warning("LLM market mapper failed", extra={"error": str(exc), "question": signal.question[:180]})
+            logger.warning("LLM market mapper failed: %s | q=%s", str(exc), signal.question[:180])
             return []
 
 
