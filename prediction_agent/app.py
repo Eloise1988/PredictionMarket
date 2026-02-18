@@ -1299,7 +1299,7 @@ def _cross_venue_arbitrage_metrics(
         budget_usd=budget_usd,
         slippage_bps=slippage_bps,
         spread_impact=spread_impact,
-        leg_name="pm_yes+ka_no",
+        leg_name="buy_pm_yes_buy_ka_no",
     )
     leg_b = _cross_venue_leg_metrics(
         polymarket_signal,
@@ -1309,10 +1309,23 @@ def _cross_venue_arbitrage_metrics(
         budget_usd=budget_usd,
         slippage_bps=slippage_bps,
         spread_impact=spread_impact,
-        leg_name="pm_no+ka_yes",
+        leg_name="buy_pm_no_buy_ka_yes",
     )
 
-    best = leg_a if float(leg_a.get("net_pnl", -1e9)) >= float(leg_b.get("net_pnl", -1e9)) else leg_b
+    candidates = [leg for leg in (leg_a, leg_b) if leg.get("available")]
+    if not candidates:
+        return {
+            "is_arb": False,
+            "net_pnl": 0.0,
+            "fees_total": 0.0,
+            "slippage_cost": 0.0,
+            "gross_payout": 0.0,
+            "total_cost": 0.0,
+            "contracts": 0.0,
+            "leg": "no_executable_lock",
+        }
+
+    best = max(candidates, key=lambda leg: float(leg.get("net_pnl", -1e9)))
     net_pnl = float(best.get("net_pnl", 0.0))
     return {
         "is_arb": net_pnl > 0.0,
@@ -1339,6 +1352,18 @@ def _cross_venue_leg_metrics(
     pm_ask, pm_bid = _signal_side_quote(pm_signal, pm_side)
     ka_ask, ka_bid = _signal_side_quote(ka_signal, ka_side)
 
+    if pm_ask is None or ka_ask is None:
+        return {
+            "leg": leg_name,
+            "available": False,
+            "contracts": 0.0,
+            "total_cost": 0.0,
+            "gross_payout": 0.0,
+            "fees_total": 0.0,
+            "slippage_cost": 0.0,
+            "net_pnl": -1e9,
+        }
+
     pm_exec = _effective_buy_price(
         ask_price=pm_ask,
         bid_price=pm_bid,
@@ -1352,15 +1377,16 @@ def _cross_venue_leg_metrics(
         spread_impact=spread_impact,
     )
 
-    if pm_exec <= 0.0 or ka_exec <= 0.0:
+    if pm_exec < 0.0 or ka_exec < 0.0:
         return {
             "leg": leg_name,
+            "available": False,
             "contracts": 0.0,
             "total_cost": 0.0,
             "gross_payout": 0.0,
             "fees_total": 0.0,
             "slippage_cost": 0.0,
-            "net_pnl": -budget_usd,
+            "net_pnl": -1e9,
         }
 
     def _total_cost_usd(contracts: float) -> tuple[float, float]:
@@ -1376,12 +1402,13 @@ def _cross_venue_leg_metrics(
     if unit_notional <= 0:
         return {
             "leg": leg_name,
+            "available": False,
             "contracts": 0.0,
             "total_cost": 0.0,
             "gross_payout": 0.0,
             "fees_total": 0.0,
             "slippage_cost": 0.0,
-            "net_pnl": -budget_usd,
+            "net_pnl": -1e9,
         }
 
     lo = 0.0
@@ -1401,6 +1428,7 @@ def _cross_venue_leg_metrics(
     net_pnl = gross_payout - total_cost
     return {
         "leg": leg_name,
+        "available": True,
         "contracts": contracts,
         "total_cost": total_cost,
         "gross_payout": gross_payout,
@@ -1410,51 +1438,39 @@ def _cross_venue_leg_metrics(
     }
 
 
-def _signal_side_quote(signal: PredictionSignal, side: str) -> tuple[float, float | None]:
+def _signal_side_quote(signal: PredictionSignal, side: str) -> tuple[float | None, float | None]:
     raw = signal.raw or {}
-    yes_px, no_px = _signal_yes_no_prices(signal)
     side_clean = (side or "").strip().lower()
 
-    if side_clean == "yes":
-        ask = _first_non_none(
-            _to_prob(raw.get("yes_price")),
-            _to_prob(raw.get("yes_ask_dollars")),
-            _to_prob(raw.get("yes_ask")),
-            _to_prob(raw.get("bestAsk")),
-            yes_px,
-        )
-        bid = _first_non_none(
-            _to_prob(raw.get("yes_bid_dollars")),
-            _to_prob(raw.get("yes_bid")),
-            _to_prob(raw.get("bestBid")),
-        )
-        return _clamp_prob(ask), _clamp_prob_or_none(bid)
+    yes_order_ask = _first_non_none(
+        _to_prob(raw.get("yes_ask_dollars")),
+        _to_prob(raw.get("yes_ask")),
+        _to_prob(raw.get("bestAsk")),
+    )
+    yes_order_bid = _first_non_none(
+        _to_prob(raw.get("yes_bid_dollars")),
+        _to_prob(raw.get("yes_bid")),
+        _to_prob(raw.get("bestBid")),
+    )
 
-    ask = _first_non_none(
-        _to_prob(raw.get("no_price")),
+    if side_clean == "yes":
+        ask = _first_non_none(yes_order_ask, _to_prob(raw.get("yes_price")))
+        bid = yes_order_bid
+        return _clamp_prob_or_none(ask), _clamp_prob_or_none(bid)
+
+    explicit_no_ask = _first_non_none(
         _to_prob(raw.get("no_ask_dollars")),
         _to_prob(raw.get("no_ask")),
+        _to_prob(raw.get("no_price")),
     )
-    bid = _first_non_none(_to_prob(raw.get("no_bid_dollars")), _to_prob(raw.get("no_bid")))
-    if ask is None:
-        yes_bid = _first_non_none(
-            _to_prob(raw.get("yes_bid_dollars")),
-            _to_prob(raw.get("yes_bid")),
-            _to_prob(raw.get("bestBid")),
-        )
-        if yes_bid is not None:
-            ask = _clamp_prob(1.0 - yes_bid)
-    if bid is None:
-        yes_ask = _first_non_none(
-            _to_prob(raw.get("yes_ask_dollars")),
-            _to_prob(raw.get("yes_ask")),
-            _to_prob(raw.get("bestAsk")),
-        )
-        if yes_ask is not None:
-            bid = _clamp_prob(1.0 - yes_ask)
-    if ask is None:
-        ask = no_px
-    return _clamp_prob(ask), _clamp_prob_or_none(bid)
+    explicit_no_bid = _first_non_none(_to_prob(raw.get("no_bid_dollars")), _to_prob(raw.get("no_bid")))
+
+    derived_no_ask = _clamp_prob(1.0 - yes_order_bid) if yes_order_bid is not None else None
+    derived_no_bid = _clamp_prob(1.0 - yes_order_ask) if yes_order_ask is not None else None
+
+    ask = _first_non_none(explicit_no_ask, derived_no_ask)
+    bid = _first_non_none(explicit_no_bid, derived_no_bid)
+    return _clamp_prob_or_none(ask), _clamp_prob_or_none(bid)
 
 
 def _effective_buy_price(ask_price: float, bid_price: float | None, slippage_bps: float, spread_impact: float) -> float:
