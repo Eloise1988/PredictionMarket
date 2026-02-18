@@ -623,18 +623,6 @@ class DecisionAgent:
                 diag.rejected_volume += 1
             return "volume"
 
-        if self.settings.enable_probability_gate:
-            p = signal.prob_yes
-            if not (p <= self.settings.probability_low_threshold or p >= self.settings.probability_high_threshold):
-                if diag is not None:
-                    diag.rejected_probability += 1
-                return "probability"
-            edge = abs(p - 0.5) * 2
-            if edge < self.settings.min_probability_edge:
-                if diag is not None:
-                    diag.rejected_edge += 1
-                return "edge"
-
         return "passed"
 
     def _select_markets_for_mapping(self, passed_signals: List[PredictionSignal]) -> List[PredictionSignal]:

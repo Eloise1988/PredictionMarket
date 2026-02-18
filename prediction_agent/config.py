@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     cross_venue_top_k: int = Field(default=20, alias="CROSS_VENUE_TOP_K")
     cross_venue_llm_verifier_enabled: bool = Field(default=False, alias="CROSS_VENUE_LLM_VERIFIER_ENABLED")
     cross_venue_llm_max_pairs: int = Field(default=80, alias="CROSS_VENUE_LLM_MAX_PAIRS")
-    enable_probability_gate: bool = Field(default=True, alias="ENABLE_PROBABILITY_GATE")
+    enable_probability_gate: bool = Field(default=False, alias="ENABLE_PROBABILITY_GATE")
     max_markets_for_llm: int = Field(default=40, alias="MAX_MARKETS_FOR_LLM")
     llm_map_max_tickers: int = Field(default=8, alias="LLM_MAP_MAX_TICKERS")
     llm_min_linkage_score: float = Field(default=0.35, alias="LLM_MIN_LINKAGE_SCORE")
