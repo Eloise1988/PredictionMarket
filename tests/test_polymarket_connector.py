@@ -167,13 +167,18 @@ class PolymarketConnectorTests(unittest.TestCase):
         self.assertEqual(len(signals), 1)
         signal = signals[0]
         self.assertEqual(signal.market_id, "12")
-        self.assertEqual(signal.url, "https://polymarket.com/event/will-joe-biden-get-coronavirus-before-the-election")
+        self.assertEqual(
+            signal.url,
+            "https://polymarket.com/event/will-joe-biden-get-coronavirus-before-the-election/will-joe-biden-get-coronavirus-before-the-election-market",
+        )
         self.assertAlmostEqual(signal.prob_yes, 0.61, places=6)
         self.assertEqual(signal.raw.get("eventSlug"), "will-joe-biden-get-coronavirus-before-the-election")
         self.assertEqual(signal.raw.get("eventTitle"), "Will Joe Biden get Coronavirus before the election?")
         self.assertEqual(signal.raw.get("eventCategory"), "Politics")
         self.assertEqual(signal.raw.get("eventTicker"), "will-joe-biden-get-coronavirus-before-the-election")
         self.assertEqual(signal.raw.get("category"), "US-current-affairs")
+        self.assertAlmostEqual(float(signal.raw.get("yes_price")), 0.61, places=6)
+        self.assertAlmostEqual(float(signal.raw.get("no_price")), 0.39, places=6)
 
     def test_skips_closed_or_archived_rows_even_if_api_returns_them(self) -> None:
         connector = PolymarketConnector(

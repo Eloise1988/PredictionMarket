@@ -1130,7 +1130,7 @@ def _to_prob(value: object) -> float | None:
         raw = float(value)
     except (TypeError, ValueError):
         return None
-    if raw <= 0:
+    if raw < 0:
         return None
     if raw <= 1:
         return max(0.0, min(1.0, raw))
@@ -1144,11 +1144,11 @@ def _signal_link(signal: PredictionSignal) -> str:
     src = (signal.source or "").lower().strip()
 
     if src == "polymarket":
+        if signal.url:
+            return signal.url
         event_slug = str(raw.get("eventSlug") or raw.get("event_slug") or raw.get("slug") or "").strip()
         if event_slug:
             return f"https://polymarket.com/event/{event_slug}"
-        if signal.url:
-            return signal.url
         return "https://polymarket.com"
 
     if src == "kalshi":

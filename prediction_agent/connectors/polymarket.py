@@ -44,11 +44,12 @@ class PolymarketConnector(PredictionConnector):
                     prob_source = "clob.price"
                 if prob_yes is None:
                     continue
+                yes_price, no_price = _extract_yes_no_prices(market, fallback_yes=prob_yes)
 
                 liquidity = _to_float(market.get("liquidityNum") or market.get("liquidity") or 0)
                 volume_24h = _to_float(market.get("volume24hr") or market.get("volume24hrClob") or 0)
 
-                url = f"https://polymarket.com/event/{event_slug}" if event_slug else "https://polymarket.com"
+                url = _build_polymarket_market_url(event_slug=event_slug, market_slug=slug)
                 event_title = _to_clean_str(market.get("eventTitle") or event.get("title"))
                 event_category = _to_clean_str(market.get("eventCategory") or event.get("category"))
                 sub_category = _to_clean_str(
@@ -89,6 +90,11 @@ class PolymarketConnector(PredictionConnector):
                             "probability_source": prob_source,
                             "outcomes": market.get("outcomes"),
                             "outcomePrices": market.get("outcomePrices"),
+                            "yes_price": yes_price,
+                            "no_price": no_price,
+                            "bestBid": market.get("bestBid"),
+                            "bestAsk": market.get("bestAsk"),
+                            "lastTradePrice": market.get("lastTradePrice"),
                             "active": market.get("active"),
                             "closed": market.get("closed"),
                             "archived": market.get("archived"),
@@ -236,8 +242,13 @@ def _to_clean_str(value: Any) -> str:
 
 
 def _normalize_probability(value: Any) -> Optional[float]:
-    prob = _to_float(value)
-    if prob <= 0:
+    if value is None:
+        return None
+    try:
+        prob = float(value)
+    except (TypeError, ValueError):
+        return None
+    if prob < 0:
         return None
     if prob > 1:
         prob = prob / 100.0
@@ -347,6 +358,63 @@ def _normalize_event_market_row(event: Dict[str, Any], market: Dict[str, Any]) -
     if row.get("archived") is None and event.get("archived") is not None:
         row["archived"] = event.get("archived")
     return row
+
+
+def _build_polymarket_market_url(event_slug: str, market_slug: str) -> str:
+    event_slug = _to_clean_str(event_slug)
+    market_slug = _to_clean_str(market_slug)
+    if event_slug and market_slug and market_slug != event_slug:
+        return f"https://polymarket.com/event/{event_slug}/{market_slug}"
+    if event_slug:
+        return f"https://polymarket.com/event/{event_slug}"
+    if market_slug:
+        return f"https://polymarket.com/event/{market_slug}"
+    return "https://polymarket.com"
+
+
+def _extract_yes_no_prices(market: Dict[str, Any], fallback_yes: float) -> tuple[float, float]:
+    outcomes = _parse_json_list(market.get("outcomes"))
+    prices = _parse_json_list(market.get("outcomePrices"))
+
+    yes_idx: Optional[int] = None
+    no_idx: Optional[int] = None
+    for i, outcome in enumerate(outcomes):
+        label = str(outcome).strip().lower()
+        if label in {"yes", "true", "will happen", "happen"}:
+            yes_idx = i
+        elif label in {"no", "false", "will not happen", "not happen"}:
+            no_idx = i
+
+    yes = _price_at(prices, yes_idx)
+    no = _price_at(prices, no_idx)
+
+    if yes is None and no is None and len(prices) >= 2:
+        yes = _normalize_probability(prices[0])
+        no = _normalize_probability(prices[1])
+
+    if yes is None and no is not None:
+        yes = _clamp01(1.0 - no)
+    if no is None and yes is not None:
+        no = _clamp01(1.0 - yes)
+
+    if yes is None:
+        yes = _clamp01(fallback_yes)
+    if no is None:
+        no = _clamp01(1.0 - yes)
+
+    return yes, no
+
+
+def _price_at(prices: List[Any], idx: Optional[int]) -> Optional[float]:
+    if idx is None:
+        return None
+    if idx < 0 or idx >= len(prices):
+        return None
+    return _normalize_probability(prices[idx])
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
 
 
 def _market_row_id(market: Dict[str, Any]) -> str:
