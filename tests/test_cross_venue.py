@@ -138,6 +138,31 @@ class CrossVenueMatcherTests(unittest.TestCase):
         matches = match_cross_venue_markets(pm, ks, min_similarity=0.10, use_llm_verifier=False)
         self.assertEqual(matches, [])
 
+    def test_rejects_clemency_vs_leadership_false_match(self) -> None:
+        pm = [
+            _signal(
+                "polymarket",
+                "pm-pardon",
+                "Will Trump pardon Ghislaine Maxwell by end of 2026?",
+                0.08,
+                300_000,
+                raw={"endDate": "2026-12-31T00:00:00Z"},
+            )
+        ]
+        ks = [
+            _signal(
+                "kalshi",
+                "ks-venezuela",
+                "Who will lead Venezuela at the end of 2026? - Donald Trump",
+                0.04,
+                290_000,
+                raw={"close_time": "2026-12-31T00:00:00Z"},
+            )
+        ]
+
+        matches = match_cross_venue_markets(pm, ks, min_similarity=0.10, use_llm_verifier=False)
+        self.assertEqual(matches, [])
+
 
 if __name__ == "__main__":
     unittest.main()

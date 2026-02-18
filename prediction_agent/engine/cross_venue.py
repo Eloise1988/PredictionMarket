@@ -36,6 +36,7 @@ class _EventSignature:
     normalized_text: str
     tokens: set[str]
     entities: set[str]
+    action_groups: set[str]
     event_type: str
     direction: str
     threshold_tokens: set[str]
@@ -230,6 +231,7 @@ def _build_signature(signal: PredictionSignal, idx: int) -> _EventSignature:
     normalized_text = _normalize_text(text_blob)
     tokens = _question_token_set(normalized_text)
     entities = _extract_entities(normalized_text, tokens)
+    action_groups = _extract_action_groups(normalized_text, tokens)
     event_type = _infer_event_type(normalized_text, tokens, entities)
     direction = _infer_direction(normalized_text, tokens, event_type)
     threshold_tokens, bps_tokens, price_tokens = _extract_threshold_tokens(normalized_text, event_type)
@@ -251,6 +253,7 @@ def _build_signature(signal: PredictionSignal, idx: int) -> _EventSignature:
         normalized_text=normalized_text,
         tokens=tokens,
         entities=entities,
+        action_groups=action_groups,
         event_type=event_type,
         direction=direction,
         threshold_tokens=threshold_tokens,
@@ -339,6 +342,8 @@ def _hard_compatibility(pm_sig: _EventSignature, ks_sig: _EventSignature) -> boo
             return False
 
     if pm_sig.direction and ks_sig.direction and pm_sig.direction != ks_sig.direction:
+        return False
+    if pm_sig.action_groups and ks_sig.action_groups and pm_sig.action_groups.isdisjoint(ks_sig.action_groups):
         return False
 
     if pm_sig.bps_tokens and ks_sig.bps_tokens and pm_sig.bps_tokens.isdisjoint(ks_sig.bps_tokens):
@@ -775,6 +780,24 @@ def _extract_entities(text: str, tokens: set[str]) -> set[str]:
     return entities
 
 
+def _extract_action_groups(text: str, tokens: set[str]) -> set[str]:
+    padded = f" {text} "
+    groups: set[str] = set()
+    for group, aliases in _ACTION_GROUP_ALIASES.items():
+        for alias in aliases:
+            alias_norm = _normalize_text(alias)
+            if not alias_norm:
+                continue
+            if " " in alias_norm:
+                if f" {alias_norm} " in padded:
+                    groups.add(group)
+                    break
+            elif alias_norm in tokens:
+                groups.add(group)
+                break
+    return groups
+
+
 def _infer_event_type(text: str, tokens: set[str], entities: set[str]) -> str:
     if ("fed" in entities or "fomc" in entities or "fed" in tokens) and (
         "rate" in tokens or _contains_any_token(text, _RATE_UP_TERMS.union(_RATE_DOWN_TERMS).union(_RATE_HOLD_TERMS))
@@ -1085,6 +1108,26 @@ _ENTITY_ALIASES = {
     "trump": {"trump", "donald trump"},
     "ali_khamenei": {"ali khamenei", "khamenei"},
     "cpi": {"cpi", "inflation"},
+}
+
+_ACTION_GROUP_ALIASES = {
+    "clemency": {"pardon", "pardons", "reprieve", "reprieves", "commute", "commutes", "commutation"},
+    "leadership_outcome": {
+        "lead",
+        "leader",
+        "president",
+        "prime minister",
+        "chancellor",
+        "governor",
+        "who will lead",
+    },
+    "leadership_change": {"out", "removed", "remove", "resign", "resigns", "die", "dies", "deposed"},
+    "rate_decision": {"rate", "rates", "fomc", "fed", "hike", "cut", "hold", "unchanged"},
+    "price_target": {"reach", "hit", "cross", "above", "below", "over", "under", "close above", "close below"},
+    "military_action": {"strike", "strikes", "attack", "attacks", "bomb", "bombs"},
+    "election_result": {"election", "wins", "win", "elected"},
+    "nomination": {"nominate", "nomination", "nominee", "appoint", "appointment"},
+    "disclosure_confirmation": {"confirm", "confirms", "announce", "announces", "disclose", "discloses"},
 }
 
 _DOMAIN_ENTITY_TOKENS = {
