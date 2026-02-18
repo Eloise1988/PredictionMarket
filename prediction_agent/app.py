@@ -216,6 +216,15 @@ class DecisionAgent:
                     float(threshold),
                     relaxed,
                 )
+        raw_matches = len(matches)
+        matches = [m for m in matches if _signal_category(m.polymarket) == _signal_category(m.kalshi)]
+        category_filtered = raw_matches - len(matches)
+        if category_filtered > 0:
+            logger.info(
+                "Cross-venue category filter applied | removed=%s remaining=%s",
+                category_filtered,
+                len(matches),
+            )
         total_matches = len(matches)
 
         rows = []
