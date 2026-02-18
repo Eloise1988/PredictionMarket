@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class PolymarketConnector(PredictionConnector):
     source_name = "polymarket"
 
-    def __init__(self, gamma_base_url: str, clob_base_url: str, limit: int = 200, timeout: int = 15):
+    def __init__(self, gamma_base_url: str, clob_base_url: str, limit: int = 1000, timeout: int = 15):
         self.gamma_base_url = gamma_base_url.rstrip("/")
         self.clob_base_url = clob_base_url.rstrip("/")
         self.limit = max(1, int(limit))
@@ -26,7 +26,10 @@ class PolymarketConnector(PredictionConnector):
         signals: List[PredictionSignal] = []
         for market in markets:
             try:
-                question = (market.get("question") or "").strip()
+                event = _primary_event(market)
+                slug = _to_clean_str(market.get("slug"))
+                event_slug = _to_clean_str(market.get("eventSlug") or event.get("slug") or slug)
+                question = _to_clean_str(market.get("question") or event.get("title"))
                 if not question:
                     continue
 
@@ -40,14 +43,22 @@ class PolymarketConnector(PredictionConnector):
                 liquidity = _to_float(market.get("liquidityNum") or market.get("liquidity") or 0)
                 volume_24h = _to_float(market.get("volume24hr") or market.get("volume24hrClob") or 0)
 
-                slug = market.get("slug") or ""
-                event_slug = market.get("eventSlug") or slug
                 url = f"https://polymarket.com/event/{event_slug}" if event_slug else "https://polymarket.com"
+                event_title = _to_clean_str(market.get("eventTitle") or event.get("title"))
+                event_category = _to_clean_str(market.get("eventCategory") or event.get("category"))
+                sub_category = _to_clean_str(
+                    market.get("subCategory") or event.get("subCategory") or event.get("subcategory")
+                )
+                category = _to_clean_str(market.get("category") or event_category)
 
-                updated_at = _parse_dt(market.get("updatedAt"))
-                market_id = str(market.get("id") or market.get("conditionId") or slug)
+                updated_at = _parse_dt(market.get("updatedAt") or event.get("updatedAt"))
+                market_id = _to_clean_str(market.get("id") or market.get("conditionId") or slug)
                 if not market_id:
                     continue
+
+                tags = _extract_tags(market.get("tags"))
+                if not tags:
+                    tags = _extract_tags(event.get("tags"))
 
                 signals.append(
                     PredictionSignal(
@@ -62,15 +73,21 @@ class PolymarketConnector(PredictionConnector):
                         raw={
                             "slug": slug,
                             "eventSlug": event_slug,
-                            "endDate": market.get("endDate"),
-                            "category": market.get("category"),
-                            "eventCategory": market.get("eventCategory"),
-                            "subCategory": market.get("subCategory"),
-                            "eventTitle": market.get("eventTitle"),
-                            "tags": _extract_tags(market.get("tags")),
+                            "eventId": _to_clean_str(event.get("id")),
+                            "eventTicker": _to_clean_str(event.get("ticker")),
+                            "endDate": market.get("endDate") or event.get("endDate"),
+                            "category": category,
+                            "eventCategory": event_category,
+                            "subCategory": sub_category,
+                            "eventTitle": event_title,
+                            "tags": tags,
                             "probability_source": prob_source,
                             "outcomes": market.get("outcomes"),
                             "outcomePrices": market.get("outcomePrices"),
+                            "active": market.get("active"),
+                            "closed": market.get("closed"),
+                            "archived": market.get("archived"),
+                            "restricted": market.get("restricted"),
                         },
                     )
                 )
@@ -81,8 +98,8 @@ class PolymarketConnector(PredictionConnector):
         return signals
 
     def _fetch_markets_paginated(self) -> List[Dict[str, Any]]:
-        # Gamma caps page size, so we page until limit is reached or no new rows are returned.
-        page_size = min(200, self.limit)
+        # Gamma supports `active=true&limit=...`; use offset paging when limit exceeds one page.
+        page_size = min(1000, self.limit)
         offset = 0
         rows: List[Dict[str, Any]] = []
         seen_ids: set[str] = set()
@@ -90,11 +107,12 @@ class PolymarketConnector(PredictionConnector):
         while len(rows) < self.limit:
             remaining = self.limit - len(rows)
             params = {
-                "closed": False,
                 "active": True,
                 "limit": min(page_size, remaining),
-                "offset": offset,
             }
+            if offset > 0:
+                params["offset"] = offset
+
             payload = self.http.get_json(f"{self.gamma_base_url}/markets", params=params)
             if not isinstance(payload, list):
                 logger.warning("Unexpected Polymarket response type", extra={"type": type(payload).__name__})
@@ -104,7 +122,7 @@ class PolymarketConnector(PredictionConnector):
 
             added = 0
             for market in payload:
-                market_id = str(market.get("id") or market.get("conditionId") or market.get("slug") or "")
+                market_id = _market_row_id(market)
                 if market_id:
                     if market_id in seen_ids:
                         continue
@@ -130,22 +148,20 @@ class PolymarketConnector(PredictionConnector):
         if outcomes and prices and len(outcomes) == len(prices):
             for i, outcome in enumerate(outcomes):
                 if str(outcome).strip().lower() in {"yes", "true", "will happen", "happen"}:
-                    prob = _to_float(prices[i])
-                    if prob <= 1:
+                    prob = _normalize_probability(prices[i])
+                    if prob is not None:
                         return prob, "gamma.outcomePrices.yes"
-                    return prob / 100.0, "gamma.outcomePrices.yes"
 
             # Binary markets often store YES as first outcome.
-            prob = _to_float(prices[0])
-            if prob <= 1:
+            prob = _normalize_probability(prices[0])
+            if prob is not None:
                 return prob, "gamma.outcomePrices.first_outcome"
-            return prob / 100.0, "gamma.outcomePrices.first_outcome"
 
-        for key in ("lastTradePrice", "bestAsk", "bestBid"):
+        for key in ("lastTradePrice", "bestAsk", "bestBid", "lastPrice", "price"):
             if key in market:
-                raw = _to_float(market[key])
-                if raw > 0:
-                    return (raw if raw <= 1 else raw / 100.0), f"gamma.{key}"
+                prob = _normalize_probability(market[key])
+                if prob is not None:
+                    return prob, f"gamma.{key}"
 
         return None, ""
 
@@ -163,10 +179,9 @@ class PolymarketConnector(PredictionConnector):
         if isinstance(payload, dict):
             for key in ("price", "mid", "midpoint"):
                 if key in payload:
-                    value = _to_float(payload[key])
-                    if value <= 1:
+                    value = _normalize_probability(payload[key])
+                    if value is not None:
                         return value
-                    return value / 100.0
         return None
 
 
@@ -191,6 +206,38 @@ def _to_float(value: Any) -> float:
         return 0.0
 
 
+def _to_clean_str(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _normalize_probability(value: Any) -> Optional[float]:
+    prob = _to_float(value)
+    if prob <= 0:
+        return None
+    if prob > 1:
+        prob = prob / 100.0
+    if prob < 0 or prob > 1:
+        return None
+    return prob
+
+
+def _market_row_id(market: Dict[str, Any]) -> str:
+    return _to_clean_str(market.get("id") or market.get("conditionId") or market.get("slug"))
+
+
+def _primary_event(market: Dict[str, Any]) -> Dict[str, Any]:
+    raw_events = market.get("events")
+    if isinstance(raw_events, list):
+        for event in raw_events:
+            if isinstance(event, dict):
+                return event
+    if isinstance(raw_events, dict):
+        return raw_events
+    return {}
+
+
 def _parse_dt(raw: Any) -> datetime:
     if isinstance(raw, str) and raw:
         try:
@@ -203,6 +250,9 @@ def _parse_dt(raw: Any) -> datetime:
 def _extract_tags(raw_tags: Any) -> List[str]:
     if not raw_tags:
         return []
+    if isinstance(raw_tags, str):
+        parsed = _parse_json_list(raw_tags)
+        return _extract_tags(parsed)
     if isinstance(raw_tags, list):
         out: List[str] = []
         for item in raw_tags:

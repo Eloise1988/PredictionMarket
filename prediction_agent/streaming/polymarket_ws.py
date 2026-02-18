@@ -24,6 +24,7 @@ class _MarketMeta:
     liquidity: float
     volume_24h: float
     updated_at: datetime
+    raw: Dict[str, Any]
 
 
 class PolymarketWebsocketStreamer(SignalStreamer):
@@ -60,14 +61,15 @@ class PolymarketWebsocketStreamer(SignalStreamer):
                 await asyncio.sleep(3)
 
     def _load_token_map(self) -> Dict[str, _MarketMeta]:
-        params = {"closed": "false", "active": "true", "limit": self.market_limit}
+        params = {"active": "true", "limit": self.market_limit}
         markets = self.http.get_json(f"{self.gamma_base_url}/markets", params=params)
         if not isinstance(markets, list):
             return {}
 
         token_map: Dict[str, _MarketMeta] = {}
         for market in markets:
-            question = (market.get("question") or "").strip()
+            event = _primary_event(market)
+            question = _to_clean_str(market.get("question") or event.get("title"))
             if not question:
                 continue
 
@@ -75,20 +77,36 @@ class PolymarketWebsocketStreamer(SignalStreamer):
             if not token_ids:
                 continue
 
-            yes_token_id = str(token_ids[0])
-            market_id = str(market.get("id") or market.get("conditionId") or "")
+            yes_token_id = _to_clean_str(token_ids[0])
+            market_id = _to_clean_str(market.get("id") or market.get("conditionId") or market.get("slug"))
             if not market_id:
                 continue
 
-            slug = market.get("slug") or ""
-            url = f"https://polymarket.com/event/{slug}" if slug else "https://polymarket.com"
+            slug = _to_clean_str(market.get("slug"))
+            event_slug = _to_clean_str(market.get("eventSlug") or event.get("slug") or slug)
+            url = f"https://polymarket.com/event/{event_slug}" if event_slug else "https://polymarket.com"
+            event_category = _to_clean_str(market.get("eventCategory") or event.get("category"))
+            raw_meta = {
+                "slug": slug,
+                "eventSlug": event_slug,
+                "eventId": _to_clean_str(event.get("id")),
+                "eventTicker": _to_clean_str(event.get("ticker")),
+                "eventTitle": _to_clean_str(market.get("eventTitle") or event.get("title")),
+                "category": _to_clean_str(market.get("category") or event_category),
+                "eventCategory": event_category,
+                "subCategory": _to_clean_str(
+                    market.get("subCategory") or event.get("subCategory") or event.get("subcategory")
+                ),
+                "tags": _extract_tags(market.get("tags")) or _extract_tags(event.get("tags")),
+            }
             token_map[yes_token_id] = _MarketMeta(
                 market_id=market_id,
                 question=question,
                 url=url,
                 liquidity=_to_float(market.get("liquidityNum") or market.get("liquidity") or 0),
                 volume_24h=_to_float(market.get("volume24hr") or market.get("volume24hrClob") or 0),
-                updated_at=_parse_dt(market.get("updatedAt")),
+                updated_at=_parse_dt(market.get("updatedAt") or event.get("updatedAt")),
+                raw=raw_meta,
             )
 
         return token_map
@@ -113,6 +131,8 @@ class PolymarketWebsocketStreamer(SignalStreamer):
             return None
 
         now = datetime.now(timezone.utc)
+        raw = dict(meta.raw)
+        raw["stream_event"] = event
         return PredictionSignal(
             source=self.source_name,
             market_id=meta.market_id,
@@ -122,7 +142,7 @@ class PolymarketWebsocketStreamer(SignalStreamer):
             volume_24h=meta.volume_24h,
             liquidity=meta.liquidity,
             updated_at=now,
-            raw={"stream_event": event},
+            raw=raw,
         )
 
 
@@ -145,16 +165,16 @@ def _to_event_list(raw: str) -> List[Dict[str, Any]]:
 def _extract_probability(event: Dict[str, Any]) -> Optional[float]:
     for key in ("price", "mid", "midpoint", "last_trade_price", "best_bid", "best_ask"):
         if key in event:
-            value = _to_float(event[key])
-            if value <= 0:
-                continue
-            return value if value <= 1 else value / 100.0
+            value = _normalize_probability(event[key])
+            if value is not None:
+                return value
 
     bid = _to_float(event.get("best_bid"))
     ask = _to_float(event.get("best_ask"))
     if bid > 0 and ask > 0:
-        midpoint = (bid + ask) / 2
-        return midpoint if midpoint <= 1 else midpoint / 100.0
+        midpoint = _normalize_probability((bid + ask) / 2)
+        if midpoint is not None:
+            return midpoint
 
     return None
 
@@ -178,6 +198,59 @@ def _to_float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _to_clean_str(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _normalize_probability(value: Any) -> Optional[float]:
+    prob = _to_float(value)
+    if prob <= 0:
+        return None
+    if prob > 1:
+        prob = prob / 100.0
+    if prob < 0 or prob > 1:
+        return None
+    return prob
+
+
+def _primary_event(market: Dict[str, Any]) -> Dict[str, Any]:
+    raw_events = market.get("events")
+    if isinstance(raw_events, list):
+        for event in raw_events:
+            if isinstance(event, dict):
+                return event
+    if isinstance(raw_events, dict):
+        return raw_events
+    return {}
+
+
+def _extract_tags(raw_tags: Any) -> List[str]:
+    if not raw_tags:
+        return []
+    if isinstance(raw_tags, str):
+        return _extract_tags(_parse_json_list(raw_tags))
+    if not isinstance(raw_tags, list):
+        return []
+
+    out: List[str] = []
+    for item in raw_tags:
+        if isinstance(item, str):
+            cleaned = item.strip()
+            if cleaned:
+                out.append(cleaned)
+            continue
+        if not isinstance(item, dict):
+            continue
+        for key in ("slug", "name", "label", "tag"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                out.append(value.strip())
+                break
+    return out
 
 
 def _parse_dt(raw: Any) -> datetime:

@@ -928,6 +928,34 @@ _ENTERTAINMENT_TERMS = (
     "actress",
 )
 
+_EXCLUDED_CATEGORY_TERMS = (
+    "sports",
+    "sport",
+    "soccer",
+    "football",
+    "basketball",
+    "baseball",
+    "hockey",
+    "tennis",
+    "golf",
+    "mma",
+    "boxing",
+    "esports",
+    "entertainment",
+    "movie",
+    "film",
+    "music",
+    "celebrity",
+    "television",
+    "award",
+)
+
+_GEOPOLITICS_CATEGORY_TERMS = ("geopolitics", "geopolitical", "international", "war", "conflict", "world affairs")
+_POLITICS_CATEGORY_TERMS = ("politics", "political", "government", "election", "policy", "current affairs")
+_ECONOMY_CATEGORY_TERMS = ("economy", "economic", "macro", "inflation", "employment", "rates")
+_FINANCE_CATEGORY_TERMS = ("finance", "financial", "markets", "market", "business", "crypto", "stocks", "equities")
+_TECH_CATEGORY_TERMS = ("technology", "tech", "ai", "artificial intelligence")
+
 
 def _is_finance_signal(signal: PredictionSignal) -> bool:
     # Legacy function name retained. It now means: "in target universe".
@@ -940,12 +968,19 @@ def _signal_category(signal: PredictionSignal) -> str:
     if not combined:
         return "other"
 
+    explicit_category = _signal_explicit_category(signal)
+    if explicit_category == "excluded":
+        return "excluded"
+
     if _contains_any(combined, _SPORTS_TERMS):
         return "excluded"
     if _contains_any(combined, _ENTERTAINMENT_TERMS):
         return "excluded"
     if _looks_like_competition_market(question):
         return "excluded"
+
+    if explicit_category:
+        return explicit_category
 
     # Prefer explicit metadata categories when present.
     if raw_text.strip():
@@ -973,6 +1008,33 @@ def _signal_category(signal: PredictionSignal) -> str:
     return "other"
 
 
+def _signal_explicit_category(signal: PredictionSignal) -> str:
+    raw = signal.raw or {}
+    category_blob = " ".join(
+        [
+            str(raw.get("category") or ""),
+            str(raw.get("eventCategory") or ""),
+            str(raw.get("subCategory") or ""),
+            " ".join(str(x) for x in raw.get("tags", []) if isinstance(x, str)),
+        ]
+    )
+    if not category_blob.strip():
+        return ""
+    if _contains_any(category_blob, _EXCLUDED_CATEGORY_TERMS):
+        return "excluded"
+    if _contains_any(category_blob, _GEOPOLITICS_CATEGORY_TERMS):
+        return "geopolitics"
+    if _contains_any(category_blob, _POLITICS_CATEGORY_TERMS):
+        return "politics"
+    if _contains_any(category_blob, _ECONOMY_CATEGORY_TERMS):
+        return "economy"
+    if _contains_any(category_blob, _FINANCE_CATEGORY_TERMS):
+        return "finance"
+    if _contains_any(category_blob, _TECH_CATEGORY_TERMS):
+        return "tech"
+    return ""
+
+
 def _signal_text_blob(signal: PredictionSignal) -> tuple[str, str]:
     raw = signal.raw or {}
     raw_text = " ".join(
@@ -982,6 +1044,7 @@ def _signal_text_blob(signal: PredictionSignal) -> tuple[str, str]:
             str(raw.get("subCategory") or ""),
             str(raw.get("eventTitle") or ""),
             str(raw.get("eventSlug") or ""),
+            str(raw.get("eventTicker") or ""),
             str(raw.get("slug") or ""),
             str(raw.get("event_ticker") or ""),
             str(raw.get("series_ticker") or ""),
@@ -1022,7 +1085,7 @@ def _signal_link(signal: PredictionSignal) -> str:
     src = (signal.source or "").lower().strip()
 
     if src == "polymarket":
-        event_slug = str(raw.get("eventSlug") or raw.get("slug") or "").strip()
+        event_slug = str(raw.get("eventSlug") or raw.get("event_slug") or raw.get("slug") or "").strip()
         if event_slug:
             return f"https://polymarket.com/event/{event_slug}"
         if signal.url:
