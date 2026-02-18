@@ -55,7 +55,7 @@ _STOPWORDS = {
 def match_cross_venue_markets(
     polymarket_signals: List[PredictionSignal],
     kalshi_signals: List[PredictionSignal],
-    min_similarity: float = 0.34,
+    min_similarity: float = 0.20,
 ) -> List[CrossVenueMatch]:
     pm = sorted(polymarket_signals, key=lambda s: (s.liquidity, s.volume_24h), reverse=True)
     ks = sorted(kalshi_signals, key=lambda s: (s.liquidity, s.volume_24h), reverse=True)
@@ -74,7 +74,7 @@ def match_cross_venue_markets(
         for idx, k in enumerate(ks):
             if idx in used_kalshi:
                 continue
-            sim = _jaccard_similarity(p_tokens, ks_tokens[idx])
+            sim = _similarity_score(p_tokens, ks_tokens[idx])
             if sim < min_similarity:
                 continue
             if sim > best_similarity:
@@ -105,7 +105,15 @@ def match_cross_venue_markets(
 
 def _question_token_set(text: str) -> set[str]:
     tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
-    return {t for t in tokens if len(t) > 2 and t not in _STOPWORDS}
+    out: set[str] = set()
+    for tok in tokens:
+        if len(tok) <= 2:
+            continue
+        tok = _TOKEN_ALIASES.get(tok, tok)
+        if tok in _STOPWORDS:
+            continue
+        out.add(tok)
+    return out
 
 
 def _jaccard_similarity(a: set[str], b: set[str]) -> float:
@@ -116,3 +124,44 @@ def _jaccard_similarity(a: set[str], b: set[str]) -> float:
     if union == 0:
         return 0.0
     return inter / union
+
+
+def _overlap_similarity(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a.intersection(b))
+    denom = min(len(a), len(b))
+    if denom == 0:
+        return 0.0
+    return inter / denom
+
+
+def _similarity_score(a: set[str], b: set[str]) -> float:
+    j = _jaccard_similarity(a, b)
+    o = _overlap_similarity(a, b)
+    return max(j, 0.70 * o + 0.30 * j)
+
+
+_TOKEN_ALIASES = {
+    "u": "us",
+    "usa": "us",
+    "america": "us",
+    "american": "us",
+    "federal": "fed",
+    "reserve": "fed",
+    "rates": "rate",
+    "inflation": "cpi",
+    "consumer": "cpi",
+    "price": "cpi",
+    "prices": "cpi",
+    "gdp": "economy",
+    "recession": "economy",
+    "jobs": "employment",
+    "unemployment": "employment",
+    "btc": "bitcoin",
+    "eth": "ethereum",
+    "nomination": "nominate",
+    "nominee": "nominate",
+    "elections": "election",
+    "presidential": "president",
+}

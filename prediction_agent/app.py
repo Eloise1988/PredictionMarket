@@ -119,9 +119,7 @@ class DecisionAgent:
         if limit > 0:
             finance = finance[:limit]
 
-        print(
-            "rank | liq_usd | vol24h_usd | prob_yes | gate | source | market_id | question"
-        )
+        print("rank | liq_usd | vol24h_usd | prob_yes | gate | source | market_id | question")
         print("-" * 180)
         for idx, s in enumerate(finance, start=1):
             gate = self._gate_reason(s)
@@ -137,7 +135,7 @@ class DecisionAgent:
             )
 
         logger.info(
-            "Finance table complete | total_input=%s source_filtered=%s finance_ranked=%s shown=%s",
+            "Target-universe table complete | total_input=%s source_filtered=%s universe_ranked=%s shown=%s",
             len(signals),
             len(dedup),
             len([s for s in ranked if _is_finance_signal(s)]),
@@ -160,7 +158,7 @@ class DecisionAgent:
 
         if not polymarket_signals or not kalshi_signals:
             logger.info(
-                "Cross-venue table unavailable | polymarket_total=%s polymarket_finance=%s kalshi_total=%s kalshi_finance=%s",
+                "Cross-venue table unavailable | polymarket_total=%s polymarket_universe=%s kalshi_total=%s kalshi_universe=%s",
                 len(pm_all),
                 len(polymarket_signals),
                 len(ks_all),
@@ -174,6 +172,19 @@ class DecisionAgent:
             kalshi_signals=kalshi_signals,
             min_similarity=max(0.0, min(1.0, float(threshold))),
         )
+        if not matches and threshold > 0.10:
+            relaxed = max(0.10, round(float(threshold) * 0.55, 2))
+            matches = match_cross_venue_markets(
+                polymarket_signals=polymarket_signals,
+                kalshi_signals=kalshi_signals,
+                min_similarity=relaxed,
+            )
+            if matches:
+                logger.info(
+                    "Cross-venue match fallback used | original_min_similarity=%.2f relaxed_min_similarity=%.2f",
+                    float(threshold),
+                    relaxed,
+                )
         total_matches = len(matches)
         if limit > 0:
             matches = matches[:limit]
@@ -197,7 +208,7 @@ class DecisionAgent:
             )
 
         logger.info(
-            "Cross-venue table complete | polymarket_total=%s polymarket_finance=%s kalshi_total=%s kalshi_used=%s matches=%s shown=%s min_similarity=%.2f",
+            "Cross-venue table complete | polymarket_total=%s polymarket_universe=%s kalshi_total=%s kalshi_used=%s matches=%s shown=%s min_similarity=%.2f",
             len(pm_all),
             len(polymarket_signals),
             len(ks_all),
@@ -780,6 +791,61 @@ def _is_finance_signal(signal: PredictionSignal) -> bool:
         "solana",
         "sol",
     )
+    politics_terms = (
+        "election",
+        "president",
+        "senate",
+        "house",
+        "congress",
+        "white house",
+        "supreme court",
+        "cabinet",
+        "nominate",
+        "nomination",
+        "policy",
+        "government",
+        "fiscal",
+        "spending bill",
+        "executive order",
+    )
+    geopolitics_terms = (
+        "war",
+        "conflict",
+        "ceasefire",
+        "sanction",
+        "tariff",
+        "trade war",
+        "nato",
+        "iran",
+        "israel",
+        "gaza",
+        "ukraine",
+        "russia",
+        "china",
+        "taiwan",
+        "north korea",
+        "south china sea",
+        "strait",
+        "missile",
+    )
+    tech_terms = (
+        "ai",
+        "artificial intelligence",
+        "semiconductor",
+        "chip",
+        "nvidia",
+        "openai",
+        "microsoft",
+        "google",
+        "meta",
+        "apple",
+        "amazon",
+        "tesla",
+        "software",
+        "cloud",
+        "cybersecurity",
+        "robotaxi",
+    )
     sports_terms = (
         "world cup",
         "fifa",
@@ -814,11 +880,40 @@ def _is_finance_signal(signal: PredictionSignal) -> bool:
 
     # If category metadata exists, trust explicit finance tags.
     if raw_text.strip() and any(
-        x in raw_text for x in ("finance", "markets", "economy", "business", "crypto", "macro", "rates", "inflation")
+        x in raw_text
+        for x in (
+            "finance",
+            "markets",
+            "economy",
+            "business",
+            "crypto",
+            "macro",
+            "rates",
+            "inflation",
+            "politics",
+            "political",
+            "government",
+            "geopolitics",
+            "geopolitical",
+            "technology",
+            "tech",
+        )
     ):
         return True
 
     if any(x in question for x in finance_terms):
+        return True
+    if any(x in question for x in politics_terms):
+        return True
+    if any(x in question for x in geopolitics_terms):
+        return True
+    if any(x in question for x in tech_terms):
+        return True
+    if any(x in raw_text for x in politics_terms):
+        return True
+    if any(x in raw_text for x in geopolitics_terms):
+        return True
+    if any(x in raw_text for x in tech_terms):
         return True
 
     if _looks_like_competition_market(question):
@@ -930,7 +1025,7 @@ def main() -> None:
     parser.add_argument(
         "--show-finance-table",
         action="store_true",
-        help="Print finance markets ranked by liquidity with gate status, then exit",
+        help="Print target-universe markets (finance/economy/politics/geopolitics/tech) ranked by liquidity with gate status, then exit",
     )
     parser.add_argument(
         "--show-cross-venue-table",
