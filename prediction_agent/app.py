@@ -188,10 +188,19 @@ class DecisionAgent:
             return
 
         threshold = self.settings.cross_venue_min_similarity if min_similarity is None else min_similarity
+        matcher_kwargs = {
+            "top_k": max(1, int(self.settings.cross_venue_top_k)),
+            "use_llm_verifier": bool(self.settings.cross_venue_llm_verifier_enabled),
+            "llm_api_key": str(self.settings.openai_api_key or ""),
+            "llm_model": str(self.settings.openai_model or "gpt-5-mini"),
+            "llm_timeout_seconds": int(self.settings.openai_timeout_seconds),
+            "max_llm_pairs": max(0, int(self.settings.cross_venue_llm_max_pairs)),
+        }
         matches = match_cross_venue_markets(
             polymarket_signals=polymarket_signals,
             kalshi_signals=kalshi_signals,
             min_similarity=max(0.0, min(1.0, float(threshold))),
+            **matcher_kwargs,
         )
         if not matches and threshold > 0.10:
             relaxed = max(0.10, round(float(threshold) * 0.55, 2))
@@ -199,6 +208,7 @@ class DecisionAgent:
                 polymarket_signals=polymarket_signals,
                 kalshi_signals=kalshi_signals,
                 min_similarity=relaxed,
+                **matcher_kwargs,
             )
             if matches:
                 logger.info(
