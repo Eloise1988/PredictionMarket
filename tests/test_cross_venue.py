@@ -58,6 +58,34 @@ class CrossVenueMatcherTests(unittest.TestCase):
         kalshi_ids = {m.kalshi.market_id for m in matches}
         self.assertEqual(kalshi_ids, {"ks1", "ks2"})
 
+    def test_fed_directional_markets_do_not_cross_match_hike_and_cut(self) -> None:
+        pm = [
+            _signal(
+                "polymarket",
+                "pm-cut",
+                "Will the Fed decrease interest rates by 25 bps after the March 2026 meeting?",
+                0.62,
+                900_000,
+            ),
+            _signal(
+                "polymarket",
+                "pm-hike",
+                "Will the Fed increase interest rates by 25+ bps after the March 2026 meeting?",
+                0.08,
+                850_000,
+            ),
+        ]
+        ks = [
+            _signal("kalshi", "ks-hike", "Fed decision in March? - Hike 25bps", 0.06, 820_000),
+            _signal("kalshi", "ks-cut", "Fed decision in March? - Cut 25bps", 0.59, 810_000),
+        ]
+
+        matches = match_cross_venue_markets(pm, ks, min_similarity=0.10)
+        self.assertEqual(len(matches), 2)
+        pair_map = {m.polymarket.market_id: m.kalshi.market_id for m in matches}
+        self.assertEqual(pair_map.get("pm-cut"), "ks-cut")
+        self.assertEqual(pair_map.get("pm-hike"), "ks-hike")
+
 
 if __name__ == "__main__":
     unittest.main()

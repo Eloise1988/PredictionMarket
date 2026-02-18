@@ -74,6 +74,8 @@ def match_cross_venue_markets(
         for idx, k in enumerate(ks):
             if idx in used_kalshi:
                 continue
+            if not _is_semantically_compatible(p.question, k.question):
+                continue
             sim = _similarity_score(p_tokens, ks_tokens[idx])
             if sim < min_similarity:
                 continue
@@ -142,6 +144,79 @@ def _similarity_score(a: set[str], b: set[str]) -> float:
     return max(j, 0.70 * o + 0.30 * j)
 
 
+def _is_semantically_compatible(a_text: str, b_text: str) -> bool:
+    a = (a_text or "").lower()
+    b = (b_text or "").lower()
+
+    if _looks_like_rate_decision(a) and _looks_like_rate_decision(b):
+        a_dir = _rate_direction(a)
+        b_dir = _rate_direction(b)
+        if a_dir and b_dir and a_dir != b_dir:
+            return False
+
+        a_bps = _basis_point_values(a)
+        b_bps = _basis_point_values(b)
+        if a_bps and b_bps and not a_bps.intersection(b_bps):
+            return False
+
+    return True
+
+
+def _looks_like_rate_decision(text: str) -> bool:
+    tokens = set(re.findall(r"[a-z0-9]+", text))
+    return bool(tokens.intersection(_RATE_DECISION_TERMS))
+
+
+def _rate_direction(text: str) -> str:
+    tokens = set(re.findall(r"[a-z0-9]+", text))
+    has_up = bool(tokens.intersection(_RATE_UP_TERMS))
+    has_down = bool(tokens.intersection(_RATE_DOWN_TERMS))
+    has_flat = bool(tokens.intersection(_RATE_HOLD_TERMS))
+
+    if has_flat and not has_up and not has_down:
+        return "hold"
+    if has_up and not has_down:
+        return "up"
+    if has_down and not has_up:
+        return "down"
+    return ""
+
+
+def _basis_point_values(text: str) -> set[int]:
+    out: set[int] = set()
+    for match in re.finditer(r"(\d+)\s*\+?\s*(?:bp|bps|basis\s+point(?:s)?)", text):
+        try:
+            out.add(int(match.group(1)))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+_RATE_DECISION_TERMS = {
+    "fed",
+    "fomc",
+    "rate",
+    "rates",
+    "hike",
+    "hikes",
+    "cut",
+    "cuts",
+    "increase",
+    "decrease",
+    "raise",
+    "lower",
+    "bps",
+    "bp",
+    "basis",
+    "point",
+    "points",
+}
+
+_RATE_UP_TERMS = {"hike", "hikes", "increase", "increases", "raise", "raises", "higher", "up"}
+_RATE_DOWN_TERMS = {"cut", "cuts", "decrease", "decreases", "lower", "lowers", "reduce", "reduces", "down"}
+_RATE_HOLD_TERMS = {"hold", "holds", "unchanged", "pause", "paused", "steady"}
+
+
 _TOKEN_ALIASES = {
     "u": "us",
     "usa": "us",
@@ -164,4 +239,14 @@ _TOKEN_ALIASES = {
     "nominee": "nominate",
     "elections": "election",
     "presidential": "president",
+    "decrease": "cut",
+    "decreases": "cut",
+    "lower": "cut",
+    "lowers": "cut",
+    "reduce": "cut",
+    "reduces": "cut",
+    "increase": "hike",
+    "increases": "hike",
+    "raise": "hike",
+    "raises": "hike",
 }
