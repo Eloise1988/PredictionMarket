@@ -26,6 +26,12 @@ class PolymarketConnector(PredictionConnector):
         signals: List[PredictionSignal] = []
         for market in markets:
             try:
+                # Enforce active/open filtering defensively in case upstream query filters drift.
+                if _to_bool(market.get("active")) is False:
+                    continue
+                if _to_bool(market.get("closed")) is True:
+                    continue
+
                 event = _primary_event(market)
                 slug = _to_clean_str(market.get("slug"))
                 event_slug = _to_clean_str(market.get("eventSlug") or event.get("slug") or slug)
@@ -98,7 +104,7 @@ class PolymarketConnector(PredictionConnector):
         return signals
 
     def _fetch_markets_paginated(self) -> List[Dict[str, Any]]:
-        # Gamma supports `active=true&limit=...`; use offset paging when limit exceeds one page.
+        # Query active/open markets only; page by offset when limit exceeds one page.
         page_size = min(1000, self.limit)
         offset = 0
         rows: List[Dict[str, Any]] = []
@@ -107,7 +113,8 @@ class PolymarketConnector(PredictionConnector):
         while len(rows) < self.limit:
             remaining = self.limit - len(rows)
             params = {
-                "active": True,
+                "active": "true",
+                "closed": "false",
                 "limit": min(page_size, remaining),
             }
             if offset > 0:
@@ -221,6 +228,20 @@ def _normalize_probability(value: Any) -> Optional[float]:
     if prob < 0 or prob > 1:
         return None
     return prob
+
+
+def _to_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        if cleaned in {"true", "1", "yes", "y"}:
+            return True
+        if cleaned in {"false", "0", "no", "n", ""}:
+            return False
+    return None
 
 
 def _market_row_id(market: Dict[str, Any]) -> str:

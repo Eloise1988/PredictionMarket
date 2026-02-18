@@ -61,13 +61,18 @@ class PolymarketWebsocketStreamer(SignalStreamer):
                 await asyncio.sleep(3)
 
     def _load_token_map(self) -> Dict[str, _MarketMeta]:
-        params = {"active": "true", "limit": self.market_limit}
+        params = {"active": "true", "closed": "false", "limit": self.market_limit}
         markets = self.http.get_json(f"{self.gamma_base_url}/markets", params=params)
         if not isinstance(markets, list):
             return {}
 
         token_map: Dict[str, _MarketMeta] = {}
         for market in markets:
+            if _to_bool(market.get("active")) is False:
+                continue
+            if _to_bool(market.get("closed")) is True:
+                continue
+
             event = _primary_event(market)
             question = _to_clean_str(market.get("question") or event.get("title"))
             if not question:
@@ -215,6 +220,20 @@ def _normalize_probability(value: Any) -> Optional[float]:
     if prob < 0 or prob > 1:
         return None
     return prob
+
+
+def _to_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        if cleaned in {"true", "1", "yes", "y"}:
+            return True
+        if cleaned in {"false", "0", "no", "n", ""}:
+            return False
+    return None
 
 
 def _primary_event(market: Dict[str, Any]) -> Dict[str, Any]:

@@ -83,8 +83,8 @@ class PolymarketConnectorTests(unittest.TestCase):
         self.assertEqual(len(signals), 1200)
         self.assertEqual([c.get("offset", 0) for c in fake_http.calls], [0, 1000])
         self.assertEqual([c["limit"] for c in fake_http.calls], [1000, 200])
-        self.assertEqual([c["active"] for c in fake_http.calls], [True, True])
-        self.assertTrue(all("closed" not in c for c in fake_http.calls))
+        self.assertEqual([c["active"] for c in fake_http.calls], ["true", "true"])
+        self.assertEqual([c["closed"] for c in fake_http.calls], ["false", "false"])
 
     def test_normalizes_event_metadata_from_gamma_payload(self) -> None:
         connector = PolymarketConnector(
@@ -132,6 +132,42 @@ class PolymarketConnectorTests(unittest.TestCase):
         self.assertEqual(signal.raw.get("eventCategory"), "Politics")
         self.assertEqual(signal.raw.get("eventTicker"), "will-joe-biden-get-coronavirus-before-the-election")
         self.assertEqual(signal.raw.get("category"), "US-current-affairs")
+
+    def test_skips_closed_markets_even_if_api_returns_them(self) -> None:
+        connector = PolymarketConnector(
+            gamma_base_url="https://gamma-api.polymarket.com",
+            clob_base_url="https://clob.polymarket.com",
+            limit=10,
+            timeout=1,
+        )
+        fake_http = FakeHttp(
+            [
+                {
+                    "id": "open-1",
+                    "question": "Open market",
+                    "active": True,
+                    "closed": False,
+                    "outcomes": ["Yes", "No"],
+                    "outcomePrices": [0.52, 0.48],
+                    "events": [{"slug": "open-1", "title": "Open market"}],
+                },
+                {
+                    "id": "closed-1",
+                    "question": "Closed market",
+                    "active": True,
+                    "closed": True,
+                    "outcomes": ["Yes", "No"],
+                    "outcomePrices": [0.40, 0.60],
+                    "events": [{"slug": "closed-1", "title": "Closed market"}],
+                },
+            ]
+        )
+        connector.http = fake_http  # type: ignore[assignment]
+
+        signals = connector.fetch_signals()
+
+        self.assertEqual(len(signals), 1)
+        self.assertEqual(signals[0].market_id, "open-1")
 
 
 if __name__ == "__main__":
