@@ -188,19 +188,10 @@ class DecisionAgent:
             return
 
         threshold = self.settings.cross_venue_min_similarity if min_similarity is None else min_similarity
-        matcher_kwargs = {
-            "top_k": max(1, int(self.settings.cross_venue_top_k)),
-            "use_llm_verifier": bool(self.settings.cross_venue_llm_verifier_enabled),
-            "llm_api_key": str(self.settings.openai_api_key or ""),
-            "llm_model": str(self.settings.openai_model or "gpt-5-mini"),
-            "llm_timeout_seconds": int(self.settings.openai_timeout_seconds),
-            "max_llm_pairs": max(0, int(self.settings.cross_venue_llm_max_pairs)),
-        }
         matches = match_cross_venue_markets(
             polymarket_signals=polymarket_signals,
             kalshi_signals=kalshi_signals,
             min_similarity=max(0.0, min(1.0, float(threshold))),
-            **matcher_kwargs,
         )
         if not matches and threshold > 0.10:
             relaxed = max(0.10, round(float(threshold) * 0.55, 2))
@@ -208,7 +199,6 @@ class DecisionAgent:
                 polymarket_signals=polymarket_signals,
                 kalshi_signals=kalshi_signals,
                 min_similarity=relaxed,
-                **matcher_kwargs,
             )
             if matches:
                 logger.info(
@@ -623,6 +613,18 @@ class DecisionAgent:
                 diag.rejected_volume += 1
             return "volume"
 
+        if self.settings.enable_probability_gate:
+            p = signal.prob_yes
+            if not (p <= self.settings.probability_low_threshold or p >= self.settings.probability_high_threshold):
+                if diag is not None:
+                    diag.rejected_probability += 1
+                return "probability"
+            edge = abs(p - 0.5) * 2
+            if edge < self.settings.min_probability_edge:
+                if diag is not None:
+                    diag.rejected_edge += 1
+                return "edge"
+
         return "passed"
 
     def _select_markets_for_mapping(self, passed_signals: List[PredictionSignal]) -> List[PredictionSignal]:
@@ -813,10 +815,9 @@ def _has_valuation_metrics(snapshot: EquitySnapshot | None) -> bool:
 
 
 _TARGET_CATEGORY_ORDER = (
-    "world_event",
+    "geopolitics",
     "politics",
     "economy",
-    "crypto",
     "finance",
     "tech",
 )
@@ -844,6 +845,13 @@ _FINANCE_TERMS = (
     "vix",
     "dxy",
     "dollar",
+    "bitcoin",
+    "btc",
+    "ethereum",
+    "eth",
+    "crypto",
+    "solana",
+    "sol",
     "commodity",
     "gold",
     "silver",
@@ -869,22 +877,6 @@ _ECONOMY_TERMS = (
     "payrolls",
 )
 
-_CRYPTO_TERMS = (
-    "crypto",
-    "cryptocurrency",
-    "bitcoin",
-    "btc",
-    "ethereum",
-    "eth",
-    "solana",
-    "sol",
-    "doge",
-    "dogecoin",
-    "xrp",
-    "token",
-    "altcoin",
-)
-
 _POLITICS_TERMS = (
     "election",
     "president",
@@ -908,7 +900,7 @@ _POLITICS_TERMS = (
     "pardon",
 )
 
-_WORLD_EVENT_TERMS = (
+_GEOPOLITICS_TERMS = (
     "war",
     "conflict",
     "ceasefire",
@@ -1015,19 +1007,9 @@ _EXCLUDED_CATEGORY_TERMS = (
     "award",
 )
 
-_WORLD_EVENT_CATEGORY_TERMS = (
-    "world event",
-    "world events",
-    "geopolitics",
-    "geopolitical",
-    "international",
-    "war",
-    "conflict",
-    "world affairs",
-)
+_GEOPOLITICS_CATEGORY_TERMS = ("geopolitics", "geopolitical", "international", "war", "conflict", "world affairs")
 _POLITICS_CATEGORY_TERMS = ("politics", "political", "government", "election", "policy", "current affairs")
 _ECONOMY_CATEGORY_TERMS = ("economy", "economic", "macro", "inflation", "employment", "rates")
-_CRYPTO_CATEGORY_TERMS = ("crypto", "cryptocurrency", "bitcoin", "btc", "ethereum", "eth", "solana", "sol")
 _FINANCE_CATEGORY_TERMS = ("finance", "financial", "markets", "market", "business", "crypto", "stocks", "equities")
 _TECH_CATEGORY_TERMS = ("technology", "tech", "ai", "artificial intelligence")
 
@@ -1059,27 +1041,23 @@ def _signal_category(signal: PredictionSignal) -> str:
 
     # Prefer explicit metadata categories when present.
     if raw_text.strip():
-        if _contains_any(raw_text, ("world event", "world events", "geopolitics", "geopolitical", "international", "war")):
-            return "world_event"
+        if _contains_any(raw_text, ("geopolitics", "geopolitical", "international", "war")):
+            return "geopolitics"
         if _contains_any(raw_text, ("politics", "political", "government", "election")):
             return "politics"
         if _contains_any(raw_text, ("economy", "economic", "macro", "inflation", "employment")):
             return "economy"
-        if _contains_any(raw_text, ("crypto", "cryptocurrency", "bitcoin", "btc", "ethereum", "eth", "solana", "sol")):
-            return "crypto"
-        if _contains_any(raw_text, ("finance", "markets", "business", "rates")):
+        if _contains_any(raw_text, ("finance", "markets", "business", "crypto", "rates")):
             return "finance"
         if _contains_any(raw_text, ("technology", "tech", "ai", "software")):
             return "tech"
 
-    if _contains_any(combined, _WORLD_EVENT_TERMS):
-        return "world_event"
+    if _contains_any(combined, _GEOPOLITICS_TERMS):
+        return "geopolitics"
     if _contains_any(combined, _POLITICS_TERMS):
         return "politics"
     if _contains_any(combined, _ECONOMY_TERMS):
         return "economy"
-    if _contains_any(combined, _CRYPTO_TERMS):
-        return "crypto"
     if _contains_any(combined, _FINANCE_TERMS):
         return "finance"
     if _contains_any(combined, _TECH_TERMS):
@@ -1101,14 +1079,12 @@ def _signal_explicit_category(signal: PredictionSignal) -> str:
         return ""
     if _contains_any(category_blob, _EXCLUDED_CATEGORY_TERMS):
         return "excluded"
-    if _contains_any(category_blob, _WORLD_EVENT_CATEGORY_TERMS):
-        return "world_event"
+    if _contains_any(category_blob, _GEOPOLITICS_CATEGORY_TERMS):
+        return "geopolitics"
     if _contains_any(category_blob, _POLITICS_CATEGORY_TERMS):
         return "politics"
     if _contains_any(category_blob, _ECONOMY_CATEGORY_TERMS):
         return "economy"
-    if _contains_any(category_blob, _CRYPTO_CATEGORY_TERMS):
-        return "crypto"
     if _contains_any(category_blob, _FINANCE_CATEGORY_TERMS):
         return "finance"
     if _contains_any(category_blob, _TECH_CATEGORY_TERMS):
