@@ -18,7 +18,7 @@ class Settings(BaseSettings):
         default="https://gamma-api.polymarket.com", alias="POLYMARKET_GAMMA_BASE_URL"
     )
     polymarket_clob_base_url: str = Field(default="https://clob.polymarket.com", alias="POLYMARKET_CLOB_BASE_URL")
-    polymarket_limit: int = Field(default=1000, alias="POLYMARKET_LIMIT")
+    polymarket_limit: int = Field(default=5000, alias="POLYMARKET_LIMIT")
 
     kalshi_enabled: bool = Field(default=True, alias="KALSHI_ENABLED")
     kalshi_base_url: str = Field(default="https://api.elections.kalshi.com/trade-api/v2", alias="KALSHI_BASE_URL")
@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     diversify_text_similarity: float = Field(default=0.72, alias="DIVERSIFY_TEXT_SIMILARITY")
     llm_select_diverse_markets: bool = Field(default=True, alias="LLM_SELECT_DIVERSE_MARKETS")
     llm_market_selection_pool: int = Field(default=120, alias="LLM_MARKET_SELECTION_POOL")
-    polymarket_min_scan_markets: int = Field(default=1000, alias="POLYMARKET_MIN_SCAN_MARKETS")
+    polymarket_min_scan_markets: int = Field(default=5000, alias="POLYMARKET_MIN_SCAN_MARKETS")
     cross_venue_min_similarity: float = Field(default=0.20, alias="CROSS_VENUE_MIN_SIMILARITY")
     enable_probability_gate: bool = Field(default=True, alias="ENABLE_PROBABILITY_GATE")
     max_markets_for_llm: int = Field(default=40, alias="MAX_MARKETS_FOR_LLM")
