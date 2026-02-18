@@ -230,8 +230,6 @@ class DecisionAgent:
                     "ka_no": ka_no,
                     "arb_flag": "yes" if arb.get("is_arb") else "no",
                     "arb_pnl": float(arb.get("net_pnl", 0.0)),
-                    "pm_link": _signal_link(m.polymarket),
-                    "ka_link": _signal_link(m.kalshi),
                 }
             )
 
@@ -248,7 +246,7 @@ class DecisionAgent:
             rows = rows[:limit]
 
         print(
-            "rank | liq_sum_usd | yes_pm | no_pm | yes_ka | no_ka | prob_diff_pp | arb | arb_pnl_1k_net | edge_hint | sim | cat_pm | cat_ka | polymarket_id | kalshi_id | polymarket_link | kalshi_link | polymarket_question | kalshi_question"
+            "rank | liq_sum_usd | yes_pm | no_pm | yes_ka | no_ka | prob_diff_pp | arb | arb_pnl_1k_net | edge_hint | sim | cat_pm | cat_ka | polymarket_id | kalshi_id | polymarket_question | kalshi_question"
         )
         print("-" * 260)
         for idx, row in enumerate(rows, start=1):
@@ -260,8 +258,6 @@ class DecisionAgent:
             ka_no = float(row["ka_no"])
             arb_flag = str(row["arb_flag"])
             arb_pnl = float(row["arb_pnl"])
-            pm_link = str(row["pm_link"])
-            ka_link = str(row["ka_link"])
             print(
                 f"{idx:>4} | "
                 f"{m.liquidity_sum:>11.0f} | "
@@ -278,8 +274,6 @@ class DecisionAgent:
                 f"{_signal_category(m.kalshi):<7} | "
                 f"{m.polymarket.market_id:<12} | "
                 f"{m.kalshi.market_id:<14} | "
-                f"{pm_link[:56]:<56} | "
-                f"{ka_link[:56]:<56} | "
                 f"{(m.polymarket.question or '').strip()[:80]} | "
                 f"{(m.kalshi.question or '').strip()[:80]}"
             )
