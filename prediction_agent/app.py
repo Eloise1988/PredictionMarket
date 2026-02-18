@@ -123,13 +123,15 @@ class DecisionAgent:
 
         ranked = sorted(dedup.values(), key=lambda s: (s.updated_at, s.liquidity, s.volume_24h), reverse=True)
         universe = [s for s in ranked if _is_finance_signal(s)]
+        passed_universe = [s for s in universe if self._gate_reason(s) == "passed"]
+        passed_total = len(passed_universe)
         if limit > 0:
-            universe = universe[:limit]
+            passed_universe = passed_universe[:limit]
 
         print("rank | liq_usd | vol24h_usd | prob_yes | category | gate | source | market_id | link | question")
         print("-" * 260)
-        for idx, s in enumerate(universe, start=1):
-            gate = self._gate_reason(s)
+        for idx, s in enumerate(passed_universe, start=1):
+            gate = "passed"
             category = _signal_category(s)
             link = _signal_link(s)
             print(
@@ -146,12 +148,13 @@ class DecisionAgent:
             )
 
         logger.info(
-            "Source table complete | source=%s total_input=%s source_filtered=%s universe_ranked=%s shown=%s",
+            "Source table complete | source=%s total_input=%s source_filtered=%s universe_ranked=%s passed=%s shown=%s",
             source,
             len(source_signals),
             len(dedup),
-            len([s for s in ranked if _is_finance_signal(s)]),
             len(universe),
+            passed_total,
+            len(passed_universe),
         )
 
     def show_cross_venue_table(self, limit: int = 0, min_similarity: float | None = None) -> None:
@@ -1219,17 +1222,17 @@ def main() -> None:
     parser.add_argument(
         "--show-finance-table",
         action="store_true",
-        help="Print target-universe markets (finance/economy/politics/geopolitics/tech) ranked by liquidity with gate status, then exit",
+        help="Print only passed target-universe markets (finance/economy/politics/geopolitics/tech), then exit",
     )
     parser.add_argument(
         "--show-polymarket-table",
         action="store_true",
-        help="Print Polymarket target-universe table ranked by liquidity with gate status, then exit",
+        help="Print only passed Polymarket target-universe markets, then exit",
     )
     parser.add_argument(
         "--show-kalshi-table",
         action="store_true",
-        help="Print Kalshi target-universe table ranked by liquidity with gate status, then exit",
+        help="Print only passed Kalshi target-universe markets, then exit",
     )
     parser.add_argument(
         "--show-cross-venue-table",
