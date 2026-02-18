@@ -128,16 +128,19 @@ class DecisionAgent:
         if limit > 0:
             passed_universe = passed_universe[:limit]
 
-        print("rank | liq_usd | vol24h_usd | prob_yes | category | gate | source | market_id | link | question")
+        print("rank | liq_usd | vol24h_usd | yes_px | no_px | prob_yes | category | gate | source | market_id | link | question")
         print("-" * 260)
         for idx, s in enumerate(passed_universe, start=1):
             gate = "passed"
             category = _signal_category(s)
             link = _signal_link(s)
+            yes_px, no_px = _signal_yes_no_prices(s)
             print(
                 f"{idx:>4} | "
                 f"{s.liquidity:>10.0f} | "
                 f"{s.volume_24h:>10.0f} | "
+                f"{_format_price_cents(yes_px):>6} | "
+                f"{_format_price_cents(no_px):>6} | "
                 f"{s.prob_yes*100:>7.2f}% | "
                 f"{category:<11} | "
                 f"{gate:<11} | "
@@ -1083,6 +1086,59 @@ def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", (text or "").lower())).strip()
 
 
+def _format_price_cents(prob: float) -> str:
+    cents = max(0.0, min(100.0, float(prob) * 100.0))
+    if abs(cents - round(cents)) < 0.05:
+        return f"{int(round(cents))}c"
+    return f"{cents:.1f}c"
+
+
+def _signal_yes_no_prices(signal: PredictionSignal) -> tuple[float, float]:
+    raw = signal.raw or {}
+
+    yes_px = (
+        _to_prob(raw.get("yes_price"))
+        or _to_prob(raw.get("yes_ask_dollars"))
+        or _to_prob(raw.get("yes_ask"))
+        or _to_prob(raw.get("last_price_dollars"))
+        or _to_prob(raw.get("last_price"))
+        or _to_prob(raw.get("yes_bid_dollars"))
+        or _to_prob(raw.get("yes_bid"))
+    )
+    if yes_px is None:
+        yes_px = max(0.0, min(1.0, float(signal.prob_yes)))
+
+    no_px = (
+        _to_prob(raw.get("no_price"))
+        or _to_prob(raw.get("no_ask_dollars"))
+        or _to_prob(raw.get("no_ask"))
+    )
+    if no_px is None:
+        yes_bid = _to_prob(raw.get("yes_bid_dollars")) or _to_prob(raw.get("yes_bid"))
+        if yes_bid is not None:
+            no_px = max(0.0, min(1.0, 1.0 - yes_bid))
+    if no_px is None:
+        no_px = max(0.0, min(1.0, 1.0 - yes_px))
+
+    return yes_px, no_px
+
+
+def _to_prob(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        raw = float(value)
+    except (TypeError, ValueError):
+        return None
+    if raw <= 0:
+        return None
+    if raw <= 1:
+        return max(0.0, min(1.0, raw))
+    if raw <= 100:
+        return max(0.0, min(1.0, raw / 100.0))
+    return None
+
+
 def _signal_link(signal: PredictionSignal) -> str:
     raw = signal.raw or {}
     src = (signal.source or "").lower().strip()
@@ -1096,14 +1152,14 @@ def _signal_link(signal: PredictionSignal) -> str:
         return "https://polymarket.com"
 
     if src == "kalshi":
+        if signal.url:
+            return signal.url
         slug = str(raw.get("slug") or "").strip()
         if slug:
             return f"https://kalshi.com/markets/{slug}"
         event_ticker = str(raw.get("event_ticker") or "").strip()
         if event_ticker:
             return f"https://kalshi.com/markets/{event_ticker.lower()}"
-        if signal.url:
-            return signal.url
         return "https://kalshi.com/markets"
 
     return signal.url or ""

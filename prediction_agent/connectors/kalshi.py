@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, urlunparse
+import re
 
 from prediction_agent.clients.http_client import HttpClient
 from prediction_agent.connectors.base import PredictionConnector
@@ -66,12 +67,14 @@ class KalshiConnector(PredictionConnector):
                     event_ticker = str(series.get("event_ticker") or market.get("event_ticker") or "").strip()
                     series_ticker = str(series.get("series_ticker") or market.get("series_ticker") or "").strip()
                     slug = str(market.get("slug") or "").strip()
-                    if slug:
-                        url = f"https://kalshi.com/markets/{slug}"
-                    elif event_ticker:
-                        url = f"https://kalshi.com/markets/{event_ticker.lower()}"
-                    else:
-                        url = "https://kalshi.com/markets"
+                    url = _build_kalshi_market_url(
+                        series_ticker=series_ticker,
+                        event_ticker=event_ticker,
+                        event_title=str(series.get("event_title") or series.get("series_title") or "").strip(),
+                        market_ticker=ticker,
+                        slug=slug,
+                    )
+                    yes_price, no_price = _extract_yes_no_prices(market, prob_yes)
 
                     volume_24h = _to_float(
                         market.get("volume_24h")
@@ -124,6 +127,16 @@ class KalshiConnector(PredictionConnector):
                                 "event_title": series.get("event_title"),
                                 "event_subtitle": series.get("event_subtitle"),
                                 "tags": _extract_series_tags(series),
+                                "yes_price": yes_price,
+                                "no_price": no_price,
+                                "yes_bid": market.get("yes_bid"),
+                                "yes_ask": market.get("yes_ask"),
+                                "last_price": market.get("last_price"),
+                                "yes_bid_dollars": market.get("yes_bid_dollars"),
+                                "yes_ask_dollars": market.get("yes_ask_dollars"),
+                                "last_price_dollars": market.get("last_price_dollars"),
+                                "no_bid": market.get("no_bid"),
+                                "no_ask": market.get("no_ask"),
                             },
                         )
                     )
@@ -207,6 +220,33 @@ def _build_market_question(series: Dict[str, Any], market: Dict[str, Any]) -> st
     return str(market.get("ticker") or market.get("market_id") or "").strip()
 
 
+def _build_kalshi_market_url(
+    series_ticker: str,
+    event_ticker: str,
+    event_title: str,
+    market_ticker: str,
+    slug: str = "",
+) -> str:
+    if slug:
+        return f"https://kalshi.com/markets/{slug}"
+
+    market_ticker_l = market_ticker.lower().strip()
+    if not market_ticker_l:
+        return "https://kalshi.com/markets"
+
+    series_segment = series_ticker.lower().strip()
+    if not series_segment:
+        if event_ticker:
+            series_segment = event_ticker.split("-")[0].lower().strip()
+
+    event_segment = _slugify(event_title)
+    if series_segment and event_segment:
+        return f"https://kalshi.com/markets/{series_segment}/{event_segment}/{market_ticker_l}"
+    if event_ticker:
+        return f"https://kalshi.com/markets/{event_ticker.lower()}"
+    return f"https://kalshi.com/markets/{market_ticker_l}"
+
+
 def _extract_series_tags(series: Dict[str, Any]) -> List[str]:
     tags: List[str] = []
 
@@ -244,6 +284,38 @@ def _extract_series_tags(series: Dict[str, Any]) -> List[str]:
         seen.add(key)
         out.append(tag)
     return out
+
+
+def _extract_yes_no_prices(market: Dict[str, Any], fallback_yes_prob: float) -> tuple[float, float]:
+    # Match Kalshi UI-style "Buy Yes / Buy No" as closely as possible:
+    # yes side prefers ask, no side prefers explicit no_ask or complement of yes_bid.
+    yes = _to_prob(market.get("yes_ask_dollars"))
+    if yes is None:
+        yes = _to_prob(market.get("yes_ask"))
+    if yes is None:
+        yes = _to_prob(market.get("last_price_dollars"))
+    if yes is None:
+        yes = _to_prob(market.get("last_price"))
+    if yes is None:
+        yes = _to_prob(market.get("yes_bid_dollars"))
+    if yes is None:
+        yes = _to_prob(market.get("yes_bid"))
+    if yes is None:
+        yes = max(0.0, min(1.0, float(fallback_yes_prob)))
+
+    no = _to_prob(market.get("no_ask_dollars"))
+    if no is None:
+        no = _to_prob(market.get("no_ask"))
+    if no is None:
+        yes_bid = _to_prob(market.get("yes_bid_dollars"))
+        if yes_bid is None:
+            yes_bid = _to_prob(market.get("yes_bid"))
+        if yes_bid is not None:
+            no = max(0.0, min(1.0, 1.0 - yes_bid))
+    if no is None:
+        no = max(0.0, min(1.0, 1.0 - yes))
+
+    return yes, no
 
 
 def _extract_yes_probability(market: Dict[str, Any]) -> Optional[float]:
@@ -285,6 +357,22 @@ def _to_float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _to_prob(value: Any) -> Optional[float]:
+    v = _to_float(value)
+    if v <= 0:
+        return None
+    if v <= 1:
+        return max(0.0, min(1.0, v))
+    if v <= 100:
+        return max(0.0, min(1.0, v / 100.0))
+    return None
+
+
+def _slugify(text: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    return re.sub(r"-{2,}", "-", cleaned)
 
 
 def _parse_dt(raw: Any) -> datetime:

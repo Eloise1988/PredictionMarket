@@ -143,11 +143,16 @@ class KalshiConnectorTests(unittest.TestCase):
         signal = signals[0]
         self.assertEqual(signal.question, "Who will Trump nominate as Fed Chair? - Kevin Warsh")
         self.assertAlmostEqual(signal.prob_yes, 0.95, places=6)
-        self.assertEqual(signal.url, "https://kalshi.com/markets/kxfedchairnom-29")
+        self.assertEqual(
+            signal.url,
+            "https://kalshi.com/markets/kxfedchairnom/who-will-trump-nominate-as-fed-chair/kxfedchairnom-29-kw",
+        )
         self.assertEqual(signal.raw.get("event_ticker"), "KXFEDCHAIRNOM-29")
         self.assertEqual(signal.raw.get("series_ticker"), "KXFEDCHAIRNOM")
         self.assertEqual(signal.raw.get("category"), "Politics")
         self.assertEqual(signal.raw.get("yes_sub_title"), "Kevin Warsh")
+        self.assertAlmostEqual(float(signal.raw.get("yes_price")), 0.95, places=6)
+        self.assertAlmostEqual(float(signal.raw.get("no_price")), 0.05, places=6)
         tags = signal.raw.get("tags", [])
         self.assertIn("Politics", tags)
         self.assertIn("Trump", tags)
