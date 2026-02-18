@@ -22,17 +22,16 @@ class PolymarketConnector(PredictionConnector):
         self.http = HttpClient(timeout=timeout)
 
     def fetch_signals(self) -> List[PredictionSignal]:
-        markets = self._fetch_markets_paginated()
+        markets = self._fetch_events_markets_paginated()
         signals: List[PredictionSignal] = []
         for market in markets:
             try:
-                # Enforce active/open filtering defensively in case upstream query filters drift.
-                if _to_bool(market.get("active")) is False:
+                event = _primary_event(market)
+                if not _is_open_active_row(event):
                     continue
-                if _to_bool(market.get("closed")) is True:
+                if not _is_open_active_row(market):
                     continue
 
-                event = _primary_event(market)
                 slug = _to_clean_str(market.get("slug"))
                 event_slug = _to_clean_str(market.get("eventSlug") or event.get("slug") or slug)
                 question = _to_clean_str(market.get("question") or event.get("title"))
@@ -101,10 +100,11 @@ class PolymarketConnector(PredictionConnector):
                 logger.debug("Failed to parse Polymarket market", extra={"error": str(exc)})
                 continue
 
+        signals.sort(key=lambda s: (_safe_timestamp(s.updated_at), s.liquidity), reverse=True)
         return signals
 
-    def _fetch_markets_paginated(self) -> List[Dict[str, Any]]:
-        # Query active/open markets only; page by offset when limit exceeds one page.
+    def _fetch_events_markets_paginated(self) -> List[Dict[str, Any]]:
+        # Pull event pages, flatten event markets, and keep active/open/non-archived rows only.
         page_size = min(1000, self.limit)
         offset = 0
         rows: List[Dict[str, Any]] = []
@@ -112,41 +112,58 @@ class PolymarketConnector(PredictionConnector):
 
         while len(rows) < self.limit:
             remaining = self.limit - len(rows)
-            params = {
-                "active": "true",
-                "closed": "false",
-                "limit": min(page_size, remaining),
-            }
+            params: List[tuple[str, Any]] = [
+                ("active", "true"),
+                ("archived", "false"),
+                ("closed", "false"),
+                ("featured_order", "true"),
+                ("order", "featuredOrder"),
+                ("order", "liquidity"),
+                ("ascending", "false"),
+                ("limit", min(page_size, remaining)),
+            ]
             if offset > 0:
-                params["offset"] = offset
+                params.append(("offset", offset))
 
-            payload = self.http.get_json(f"{self.gamma_base_url}/markets", params=params)
-            if not isinstance(payload, list):
-                logger.warning("Unexpected Polymarket response type", extra={"type": type(payload).__name__})
-                break
-            if not payload:
+            payload = self.http.get_json(f"{self.gamma_base_url}/events/pagination", params=params)
+            events = _extract_event_rows(payload)
+            if not events:
                 break
 
             added = 0
-            for market in payload:
-                market_id = _market_row_id(market)
-                if market_id:
-                    if market_id in seen_ids:
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                if not _is_open_active_row(event):
+                    continue
+
+                for market in _extract_markets_from_event(event):
+                    normalized = _normalize_event_market_row(event, market)
+                    if not _is_open_active_row(normalized):
                         continue
-                    seen_ids.add(market_id)
-                rows.append(market)
-                added += 1
+
+                    market_id = _market_row_id(normalized)
+                    if market_id:
+                        if market_id in seen_ids:
+                            continue
+                        seen_ids.add(market_id)
+                    rows.append(normalized)
+                    added += 1
+                    if len(rows) >= self.limit:
+                        break
+
                 if len(rows) >= self.limit:
                     break
 
-            if len(payload) < params["limit"]:
+            if len(events) < int(_get_param_value(params, "limit", 0)):
                 break
             if added == 0:
                 # Protect against infinite loops if API keeps returning duplicate pages.
                 break
-            offset += len(payload)
+            offset += len(events)
 
-        return rows
+        rows.sort(key=_market_sort_key, reverse=True)
+        return rows[: self.limit]
 
     def _extract_probability_with_source(self, market: Dict[str, Any]) -> tuple[Optional[float], str]:
         outcomes = _parse_json_list(market.get("outcomes"))
@@ -244,6 +261,95 @@ def _to_bool(value: Any) -> Optional[bool]:
     return None
 
 
+def _is_open_active_row(row: Dict[str, Any]) -> bool:
+    active = _to_bool(row.get("active"))
+    closed = _to_bool(row.get("closed"))
+    archived = _to_bool(row.get("archived"))
+    if active is False:
+        return False
+    if closed is True:
+        return False
+    if archived is True:
+        return False
+    return True
+
+
+def _extract_event_rows(payload: Any) -> List[Dict[str, Any]]:
+    if isinstance(payload, list):
+        return [x for x in payload if isinstance(x, dict)]
+    if not isinstance(payload, dict):
+        return []
+
+    direct = payload.get("events")
+    if isinstance(direct, list):
+        return [x for x in direct if isinstance(x, dict)]
+
+    for key in ("data", "items", "results", "rows"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [x for x in value if isinstance(x, dict)]
+        if isinstance(value, dict):
+            nested = value.get("events") or value.get("items")
+            if isinstance(nested, list):
+                return [x for x in nested if isinstance(x, dict)]
+    return []
+
+
+def _get_param_value(params: List[tuple[str, Any]], key: str, default: Any) -> Any:
+    for name, value in reversed(params):
+        if name == key:
+            return value
+    return default
+
+
+def _extract_markets_from_event(event: Dict[str, Any]) -> List[Dict[str, Any]]:
+    markets = event.get("markets")
+    if isinstance(markets, list):
+        return [x for x in markets if isinstance(x, dict)]
+    if isinstance(markets, dict):
+        return [markets]
+
+    market = event.get("market")
+    if isinstance(market, dict):
+        return [market]
+    if isinstance(market, list):
+        return [x for x in market if isinstance(x, dict)]
+
+    # Some responses may include market-like rows directly in the event object.
+    if any(k in event for k in ("conditionId", "outcomes", "outcomePrices", "question", "clobTokenIds")):
+        return [event]
+    return []
+
+
+def _normalize_event_market_row(event: Dict[str, Any], market: Dict[str, Any]) -> Dict[str, Any]:
+    row = dict(market)
+    row["events"] = [event]
+
+    if not _to_clean_str(row.get("eventSlug")):
+        row["eventSlug"] = _to_clean_str(event.get("slug"))
+    if not _to_clean_str(row.get("eventTitle")):
+        row["eventTitle"] = _to_clean_str(event.get("title"))
+    if not _to_clean_str(row.get("eventCategory")):
+        row["eventCategory"] = _to_clean_str(event.get("category"))
+    if not _to_clean_str(row.get("subCategory")):
+        row["subCategory"] = _to_clean_str(event.get("subCategory") or event.get("subcategory"))
+    if not _to_clean_str(row.get("question")):
+        row["question"] = _to_clean_str(event.get("title"))
+    if row.get("updatedAt") is None and event.get("updatedAt") is not None:
+        row["updatedAt"] = event.get("updatedAt")
+    if row.get("endDate") is None and event.get("endDate") is not None:
+        row["endDate"] = event.get("endDate")
+    if row.get("category") in (None, "") and event.get("category") is not None:
+        row["category"] = event.get("category")
+    if row.get("active") is None and event.get("active") is not None:
+        row["active"] = event.get("active")
+    if row.get("closed") is None and event.get("closed") is not None:
+        row["closed"] = event.get("closed")
+    if row.get("archived") is None and event.get("archived") is not None:
+        row["archived"] = event.get("archived")
+    return row
+
+
 def _market_row_id(market: Dict[str, Any]) -> str:
     return _to_clean_str(market.get("id") or market.get("conditionId") or market.get("slug"))
 
@@ -266,6 +372,38 @@ def _parse_dt(raw: Any) -> datetime:
         except ValueError:
             pass
     return datetime.now(timezone.utc)
+
+
+def _parse_dt_or_none(raw: Any) -> Optional[datetime]:
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+    if isinstance(raw, str) and raw:
+        cleaned = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(cleaned)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def _safe_timestamp(value: datetime) -> float:
+    dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _market_sort_key(market: Dict[str, Any]) -> tuple[float, float]:
+    event = _primary_event(market)
+    dt = (
+        _parse_dt_or_none(market.get("updatedAt"))
+        or _parse_dt_or_none(market.get("endDate"))
+        or _parse_dt_or_none(market.get("createdAt"))
+        or _parse_dt_or_none(event.get("updatedAt"))
+        or _parse_dt_or_none(event.get("endDate"))
+        or _parse_dt_or_none(event.get("createdAt"))
+    )
+    liquidity = _to_float(market.get("liquidityNum") or market.get("liquidity") or event.get("liquidity") or 0)
+    return (_safe_timestamp(dt) if dt else 0.0, liquidity)
 
 
 def _extract_tags(raw_tags: Any) -> List[str]:

@@ -121,7 +121,7 @@ class DecisionAgent:
             if existing is None or signal.updated_at > existing.updated_at:
                 dedup[key] = signal
 
-        ranked = sorted(dedup.values(), key=lambda s: (s.liquidity, s.volume_24h), reverse=True)
+        ranked = sorted(dedup.values(), key=lambda s: (s.updated_at, s.liquidity, s.volume_24h), reverse=True)
         universe = [s for s in ranked if _is_finance_signal(s)]
         if limit > 0:
             universe = universe[:limit]
@@ -515,7 +515,7 @@ class DecisionAgent:
 
         ranked = sorted(
             dedup.values(),
-            key=lambda s: (s.liquidity, s.volume_24h),
+            key=lambda s: (s.updated_at, s.liquidity, s.volume_24h),
             reverse=True,
         )
         diag.after_dedup = len(ranked)
