@@ -80,7 +80,7 @@ class CrossVenueMatcherTests(unittest.TestCase):
             _signal("kalshi", "ks-cut", "Fed decision in March? - Cut 25bps", 0.59, 810_000),
         ]
 
-        matches = match_cross_venue_markets(pm, ks, min_similarity=0.10)
+        matches = match_cross_venue_markets(pm, ks, min_similarity=0.10, strict_semantics=True)
         self.assertEqual(len(matches), 2)
         pair_map = {m.polymarket.market_id: m.kalshi.market_id for m in matches}
         self.assertEqual(pair_map.get("pm-cut"), "ks-cut")
@@ -108,7 +108,7 @@ class CrossVenueMatcherTests(unittest.TestCase):
             )
         ]
 
-        matches = match_cross_venue_markets(pm, ks, min_similarity=0.10, use_llm_verifier=False)
+        matches = match_cross_venue_markets(pm, ks, min_similarity=0.10, use_llm_verifier=False, strict_semantics=True)
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0].polymarket.market_id, "pm-khamenei")
         self.assertEqual(matches[0].kalshi.market_id, "ks-khamenei")
@@ -135,7 +135,30 @@ class CrossVenueMatcherTests(unittest.TestCase):
             )
         ]
 
-        matches = match_cross_venue_markets(pm, ks, min_similarity=0.10, use_llm_verifier=False)
+        matches = match_cross_venue_markets(pm, ks, min_similarity=0.10, use_llm_verifier=False, strict_semantics=True)
+        self.assertEqual(matches, [])
+
+    def test_rejects_crypto_in_month_vs_before_next_month_without_raw_dates(self) -> None:
+        pm = [
+            _signal(
+                "polymarket",
+                "pm-btc-feb-lite",
+                "Will Bitcoin hit $150,000 in February 2026?",
+                0.17,
+                450_000,
+            )
+        ]
+        ks = [
+            _signal(
+                "kalshi",
+                "ks-btc-before-march-lite",
+                "When will Bitcoin hit $150k? - Before March 2026",
+                0.25,
+                430_000,
+            )
+        ]
+
+        matches = match_cross_venue_markets(pm, ks, min_similarity=0.10, use_llm_verifier=False, strict_semantics=True)
         self.assertEqual(matches, [])
 
     def test_rejects_clemency_vs_leadership_false_match(self) -> None:
@@ -160,7 +183,7 @@ class CrossVenueMatcherTests(unittest.TestCase):
             )
         ]
 
-        matches = match_cross_venue_markets(pm, ks, min_similarity=0.10, use_llm_verifier=False)
+        matches = match_cross_venue_markets(pm, ks, min_similarity=0.10, use_llm_verifier=False, strict_semantics=True)
         self.assertEqual(matches, [])
 
 

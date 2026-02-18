@@ -33,6 +33,7 @@ def match_cross_venue_markets(
     llm_model: str = "gpt-5-mini",
     llm_timeout_seconds: int = 20,
     max_llm_pairs: int = 80,
+    strict_semantics: bool = False,
 ) -> List[CrossVenueMatch]:
     # Keep this matcher intentionally simple and deterministic.
     del top_k, use_llm_verifier, llm_api_key, llm_model, llm_timeout_seconds, max_llm_pairs
@@ -57,9 +58,11 @@ def match_cross_venue_markets(
             if idx in used_kalshi:
                 continue
 
-            ok, diffs = _is_semantically_compatible(p, k)
-            if not ok:
-                continue
+            diffs = ""
+            if strict_semantics:
+                ok, diffs = _is_semantically_compatible(p, k)
+                if not ok:
+                    continue
 
             sim = _similarity_score(p_tokens, ks_tokens[idx])
             if sim < min_similarity:
@@ -136,6 +139,14 @@ def _is_semantically_compatible(pm: PredictionSignal, ks: PredictionSignal) -> t
         return False, "end_date"
     if pm_start and ks_start and abs((pm_start - ks_start).days) > 35:
         return False, "start_date"
+
+    # Extra strictness for price-target contracts: relation semantics must align
+    # (e.g. "in February" should not auto-match "before March").
+    if pm_type == "crypto_price_target" and ks_type == "crypto_price_target":
+        pm_rel = _time_relations(pm_text)
+        ks_rel = _time_relations(ks_text)
+        if pm_rel and ks_rel and pm_rel.isdisjoint(ks_rel):
+            return False, "time_relation"
 
     # Fall back to textual month compatibility only when concrete end bounds are unavailable.
     if not (pm_end and ks_end):
@@ -306,6 +317,22 @@ def _text_month_keys(text: str) -> set[str]:
         if year_raw.isdigit():
             out.add(f"{int(year_raw):04d}-{month:02d}")
         out.add(f"m-{month:02d}")
+    return out
+
+
+def _time_relations(text: str) -> set[str]:
+    out: set[str] = set()
+    norm = f" {_normalize_text(text)} "
+    if " before " in norm:
+        out.add("before")
+    if " by " in norm:
+        out.add("by")
+    if " in " in norm:
+        out.add("in")
+    if " after " in norm:
+        out.add("after")
+    if " on " in norm:
+        out.add("on")
     return out
 
 
