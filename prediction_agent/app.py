@@ -207,14 +207,9 @@ class DecisionAgent:
                     relaxed,
                 )
         total_matches = len(matches)
-        if limit > 0:
-            matches = matches[:limit]
 
-        print(
-            "rank | liq_sum_usd | yes_pm | no_pm | yes_ka | no_ka | prob_diff_pp | arb | arb_pnl_1k_net | edge_hint | sim | cat_pm | cat_ka | polymarket_id | kalshi_id | polymarket_link | kalshi_link | polymarket_question | kalshi_question"
-        )
-        print("-" * 260)
-        for idx, m in enumerate(matches, start=1):
+        rows = []
+        for m in matches:
             edge_hint = _cross_venue_edge_hint(m.polymarket.prob_yes, m.kalshi.prob_yes)
             pm_yes, pm_no = _signal_yes_no_prices(m.polymarket)
             ka_yes, ka_no = _signal_yes_no_prices(m.kalshi)
@@ -225,10 +220,48 @@ class DecisionAgent:
                 slippage_bps=_ARB_SLIPPAGE_BPS,
                 spread_impact=_ARB_SPREAD_IMPACT,
             )
-            arb_flag = "yes" if arb.get("is_arb") else "no"
-            arb_pnl = float(arb.get("net_pnl", 0.0))
-            pm_link = _signal_link(m.polymarket)
-            ka_link = _signal_link(m.kalshi)
+            rows.append(
+                {
+                    "match": m,
+                    "edge_hint": edge_hint,
+                    "pm_yes": pm_yes,
+                    "pm_no": pm_no,
+                    "ka_yes": ka_yes,
+                    "ka_no": ka_no,
+                    "arb_flag": "yes" if arb.get("is_arb") else "no",
+                    "arb_pnl": float(arb.get("net_pnl", 0.0)),
+                    "pm_link": _signal_link(m.polymarket),
+                    "ka_link": _signal_link(m.kalshi),
+                }
+            )
+
+        # Rank table by highest net $1k arbitrage payoff.
+        rows.sort(
+            key=lambda r: (
+                float(r["arb_pnl"]),
+                float(r["match"].liquidity_sum),
+                float(r["match"].text_similarity),
+            ),
+            reverse=True,
+        )
+        if limit > 0:
+            rows = rows[:limit]
+
+        print(
+            "rank | liq_sum_usd | yes_pm | no_pm | yes_ka | no_ka | prob_diff_pp | arb | arb_pnl_1k_net | edge_hint | sim | cat_pm | cat_ka | polymarket_id | kalshi_id | polymarket_link | kalshi_link | polymarket_question | kalshi_question"
+        )
+        print("-" * 260)
+        for idx, row in enumerate(rows, start=1):
+            m = row["match"]
+            edge_hint = str(row["edge_hint"])
+            pm_yes = float(row["pm_yes"])
+            pm_no = float(row["pm_no"])
+            ka_yes = float(row["ka_yes"])
+            ka_no = float(row["ka_no"])
+            arb_flag = str(row["arb_flag"])
+            arb_pnl = float(row["arb_pnl"])
+            pm_link = str(row["pm_link"])
+            ka_link = str(row["ka_link"])
             print(
                 f"{idx:>4} | "
                 f"{m.liquidity_sum:>11.0f} | "
@@ -260,7 +293,7 @@ class DecisionAgent:
             len(kalshi_universe),
             len(kalshi_signals),
             total_matches,
-            len(matches),
+            len(rows),
             max(0.0, min(1.0, float(threshold))),
         )
 
