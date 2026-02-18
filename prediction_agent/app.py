@@ -813,9 +813,10 @@ def _has_valuation_metrics(snapshot: EquitySnapshot | None) -> bool:
 
 
 _TARGET_CATEGORY_ORDER = (
-    "geopolitics",
+    "world_event",
     "politics",
     "economy",
+    "crypto",
     "finance",
     "tech",
 )
@@ -843,13 +844,6 @@ _FINANCE_TERMS = (
     "vix",
     "dxy",
     "dollar",
-    "bitcoin",
-    "btc",
-    "ethereum",
-    "eth",
-    "crypto",
-    "solana",
-    "sol",
     "commodity",
     "gold",
     "silver",
@@ -875,6 +869,22 @@ _ECONOMY_TERMS = (
     "payrolls",
 )
 
+_CRYPTO_TERMS = (
+    "crypto",
+    "cryptocurrency",
+    "bitcoin",
+    "btc",
+    "ethereum",
+    "eth",
+    "solana",
+    "sol",
+    "doge",
+    "dogecoin",
+    "xrp",
+    "token",
+    "altcoin",
+)
+
 _POLITICS_TERMS = (
     "election",
     "president",
@@ -898,7 +908,7 @@ _POLITICS_TERMS = (
     "pardon",
 )
 
-_GEOPOLITICS_TERMS = (
+_WORLD_EVENT_TERMS = (
     "war",
     "conflict",
     "ceasefire",
@@ -1005,9 +1015,19 @@ _EXCLUDED_CATEGORY_TERMS = (
     "award",
 )
 
-_GEOPOLITICS_CATEGORY_TERMS = ("geopolitics", "geopolitical", "international", "war", "conflict", "world affairs")
+_WORLD_EVENT_CATEGORY_TERMS = (
+    "world event",
+    "world events",
+    "geopolitics",
+    "geopolitical",
+    "international",
+    "war",
+    "conflict",
+    "world affairs",
+)
 _POLITICS_CATEGORY_TERMS = ("politics", "political", "government", "election", "policy", "current affairs")
 _ECONOMY_CATEGORY_TERMS = ("economy", "economic", "macro", "inflation", "employment", "rates")
+_CRYPTO_CATEGORY_TERMS = ("crypto", "cryptocurrency", "bitcoin", "btc", "ethereum", "eth", "solana", "sol")
 _FINANCE_CATEGORY_TERMS = ("finance", "financial", "markets", "market", "business", "crypto", "stocks", "equities")
 _TECH_CATEGORY_TERMS = ("technology", "tech", "ai", "artificial intelligence")
 
@@ -1039,23 +1059,27 @@ def _signal_category(signal: PredictionSignal) -> str:
 
     # Prefer explicit metadata categories when present.
     if raw_text.strip():
-        if _contains_any(raw_text, ("geopolitics", "geopolitical", "international", "war")):
-            return "geopolitics"
+        if _contains_any(raw_text, ("world event", "world events", "geopolitics", "geopolitical", "international", "war")):
+            return "world_event"
         if _contains_any(raw_text, ("politics", "political", "government", "election")):
             return "politics"
         if _contains_any(raw_text, ("economy", "economic", "macro", "inflation", "employment")):
             return "economy"
-        if _contains_any(raw_text, ("finance", "markets", "business", "crypto", "rates")):
+        if _contains_any(raw_text, ("crypto", "cryptocurrency", "bitcoin", "btc", "ethereum", "eth", "solana", "sol")):
+            return "crypto"
+        if _contains_any(raw_text, ("finance", "markets", "business", "rates")):
             return "finance"
         if _contains_any(raw_text, ("technology", "tech", "ai", "software")):
             return "tech"
 
-    if _contains_any(combined, _GEOPOLITICS_TERMS):
-        return "geopolitics"
+    if _contains_any(combined, _WORLD_EVENT_TERMS):
+        return "world_event"
     if _contains_any(combined, _POLITICS_TERMS):
         return "politics"
     if _contains_any(combined, _ECONOMY_TERMS):
         return "economy"
+    if _contains_any(combined, _CRYPTO_TERMS):
+        return "crypto"
     if _contains_any(combined, _FINANCE_TERMS):
         return "finance"
     if _contains_any(combined, _TECH_TERMS):
@@ -1077,12 +1101,14 @@ def _signal_explicit_category(signal: PredictionSignal) -> str:
         return ""
     if _contains_any(category_blob, _EXCLUDED_CATEGORY_TERMS):
         return "excluded"
-    if _contains_any(category_blob, _GEOPOLITICS_CATEGORY_TERMS):
-        return "geopolitics"
+    if _contains_any(category_blob, _WORLD_EVENT_CATEGORY_TERMS):
+        return "world_event"
     if _contains_any(category_blob, _POLITICS_CATEGORY_TERMS):
         return "politics"
     if _contains_any(category_blob, _ECONOMY_CATEGORY_TERMS):
         return "economy"
+    if _contains_any(category_blob, _CRYPTO_CATEGORY_TERMS):
+        return "crypto"
     if _contains_any(category_blob, _FINANCE_CATEGORY_TERMS):
         return "finance"
     if _contains_any(category_blob, _TECH_CATEGORY_TERMS):
