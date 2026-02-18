@@ -117,7 +117,7 @@ class PolymarketConnectorTests(unittest.TestCase):
         self.assertEqual([c["closed"] for c in fake_http.calls], ["false", "false"])
         self.assertEqual([c["archived"] for c in fake_http.calls], ["false", "false"])
         self.assertEqual([c["ascending"] for c in fake_http.calls], ["false", "false"])
-        self.assertEqual([c["order"] for c in fake_http.calls], [["featuredOrder", "liquidity"], ["featuredOrder", "liquidity"]])
+        self.assertEqual([c["order"] for c in fake_http.calls], ["volume", "volume"])
         self.assertTrue(all(c["url"].endswith("/events/pagination") for c in fake_http.calls))
 
     def test_normalizes_event_metadata_from_gamma_payload(self) -> None:

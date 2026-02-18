@@ -117,8 +117,7 @@ class PolymarketConnector(PredictionConnector):
                 ("archived", "false"),
                 ("closed", "false"),
                 ("featured_order", "true"),
-                ("order", "featuredOrder"),
-                ("order", "liquidity"),
+                ("order", "volume"),
                 ("ascending", "false"),
                 ("limit", min(page_size, remaining)),
             ]
