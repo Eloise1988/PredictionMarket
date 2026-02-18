@@ -205,13 +205,14 @@ class DecisionAgent:
             matches = matches[:limit]
 
         print(
-            "rank | liq_sum_usd | yes_pm | no_pm | yes_ka | no_ka | prob_diff_pp | edge_hint | sim | cat_pm | cat_ka | polymarket_id | kalshi_id | polymarket_link | kalshi_link | polymarket_question | kalshi_question"
+            "rank | liq_sum_usd | yes_pm | no_pm | yes_ka | no_ka | prob_diff_pp | arb | edge_hint | sim | cat_pm | cat_ka | polymarket_id | kalshi_id | polymarket_link | kalshi_link | polymarket_question | kalshi_question"
         )
         print("-" * 260)
         for idx, m in enumerate(matches, start=1):
             edge_hint = _cross_venue_edge_hint(m.polymarket.prob_yes, m.kalshi.prob_yes)
             pm_yes, pm_no = _signal_yes_no_prices(m.polymarket)
             ka_yes, ka_no = _signal_yes_no_prices(m.kalshi)
+            arb_flag = _cross_venue_arbitrage_flag(pm_yes, pm_no, ka_yes, ka_no)
             pm_link = _signal_link(m.polymarket)
             ka_link = _signal_link(m.kalshi)
             print(
@@ -222,6 +223,7 @@ class DecisionAgent:
                 f"{_format_price_cents(ka_yes):>6} | "
                 f"{_format_price_cents(ka_no):>6} | "
                 f"{m.probability_diff*100:>12.2f} | "
+                f"{arb_flag:<3} | "
                 f"{edge_hint:<20} | "
                 f"{m.text_similarity:>4.2f} | "
                 f"{_signal_category(m.polymarket):<7} | "
@@ -1251,6 +1253,15 @@ def _cross_venue_edge_hint(prob_pm: float, prob_kalshi: float) -> str:
     if diff <= -0.02:
         return "yes_pm/no_kalshi"
     return "aligned"
+
+
+def _cross_venue_arbitrage_flag(pm_yes: float, pm_no: float, ka_yes: float, ka_no: float) -> str:
+    # Two-leg cross-venue arb (ignores fees/slippage):
+    # 1) Buy PM yes + Kalshi no
+    # 2) Buy PM no + Kalshi yes
+    leg_a = float(pm_yes) + float(ka_no)
+    leg_b = float(pm_no) + float(ka_yes)
+    return "yes" if min(leg_a, leg_b) < 1.0 else "no"
 
 
 def _format_telegram_message(alert: AlertPayload) -> str:
