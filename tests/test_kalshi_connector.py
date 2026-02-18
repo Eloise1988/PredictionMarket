@@ -47,6 +47,8 @@ def _series_row(event_ticker: str, markets: list[dict]) -> dict:
         "event_subtitle": "During Trump's term",
         "event_title": "Who will Trump nominate as Fed Chair?",
         "category": "Politics",
+        "fee_type": "quadratic",
+        "fee_multiplier": 1,
         "product_metadata": {
             "categories": ["Politics"],
             "subcategories": {"Politics": ["Trump"]},
@@ -151,6 +153,8 @@ class KalshiConnectorTests(unittest.TestCase):
         self.assertEqual(signal.raw.get("series_ticker"), "KXFEDCHAIRNOM")
         self.assertEqual(signal.raw.get("category"), "Politics")
         self.assertEqual(signal.raw.get("yes_sub_title"), "Kevin Warsh")
+        self.assertEqual(signal.raw.get("fee_type"), "quadratic")
+        self.assertEqual(signal.raw.get("fee_multiplier"), 1)
         self.assertAlmostEqual(float(signal.raw.get("yes_price")), 0.95, places=6)
         self.assertAlmostEqual(float(signal.raw.get("no_price")), 0.05, places=6)
         tags = signal.raw.get("tags", [])

@@ -137,6 +137,8 @@ class KalshiConnector(PredictionConnector):
                                 "last_price_dollars": market.get("last_price_dollars"),
                                 "no_bid": market.get("no_bid"),
                                 "no_ask": market.get("no_ask"),
+                                "fee_type": series.get("fee_type") or market.get("fee_type"),
+                                "fee_multiplier": series.get("fee_multiplier") or market.get("fee_multiplier"),
                             },
                         )
                     )

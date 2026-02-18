@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import re
 import time
 from dataclasses import dataclass, field
@@ -25,6 +26,11 @@ from prediction_agent.storage.mongo import MongoStore
 from prediction_agent.utils.logging import configure_logging
 
 logger = logging.getLogger(__name__)
+
+_ARB_BUDGET_USD = 1000.0
+_ARB_SLIPPAGE_BPS = 15.0
+_ARB_SPREAD_IMPACT = 0.20
+_ARB_DEFAULT_POLYMARKET_FEE_BPS = 25.0
 
 
 @dataclass
@@ -205,14 +211,22 @@ class DecisionAgent:
             matches = matches[:limit]
 
         print(
-            "rank | liq_sum_usd | yes_pm | no_pm | yes_ka | no_ka | prob_diff_pp | arb | edge_hint | sim | cat_pm | cat_ka | polymarket_id | kalshi_id | polymarket_link | kalshi_link | polymarket_question | kalshi_question"
+            "rank | liq_sum_usd | yes_pm | no_pm | yes_ka | no_ka | prob_diff_pp | arb | arb_pnl_1k_net | edge_hint | sim | cat_pm | cat_ka | polymarket_id | kalshi_id | polymarket_link | kalshi_link | polymarket_question | kalshi_question"
         )
         print("-" * 260)
         for idx, m in enumerate(matches, start=1):
             edge_hint = _cross_venue_edge_hint(m.polymarket.prob_yes, m.kalshi.prob_yes)
             pm_yes, pm_no = _signal_yes_no_prices(m.polymarket)
             ka_yes, ka_no = _signal_yes_no_prices(m.kalshi)
-            arb_flag = _cross_venue_arbitrage_flag(pm_yes, pm_no, ka_yes, ka_no)
+            arb = _cross_venue_arbitrage_metrics(
+                m.polymarket,
+                m.kalshi,
+                budget_usd=_ARB_BUDGET_USD,
+                slippage_bps=_ARB_SLIPPAGE_BPS,
+                spread_impact=_ARB_SPREAD_IMPACT,
+            )
+            arb_flag = "yes" if arb.get("is_arb") else "no"
+            arb_pnl = float(arb.get("net_pnl", 0.0))
             pm_link = _signal_link(m.polymarket)
             ka_link = _signal_link(m.kalshi)
             print(
@@ -224,6 +238,7 @@ class DecisionAgent:
                 f"{_format_price_cents(ka_no):>6} | "
                 f"{m.probability_diff*100:>12.2f} | "
                 f"{arb_flag:<3} | "
+                f"{arb_pnl:>10.2f} | "
                 f"{edge_hint:<20} | "
                 f"{m.text_similarity:>4.2f} | "
                 f"{_signal_category(m.polymarket):<7} | "
@@ -1148,6 +1163,20 @@ def _to_prob(value: object) -> float | None:
     return None
 
 
+def _to_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        if cleaned in {"true", "1", "yes", "y"}:
+            return True
+        if cleaned in {"false", "0", "no", "n", ""}:
+            return False
+    return None
+
+
 def _signal_link(signal: PredictionSignal) -> str:
     raw = signal.raw or {}
     src = (signal.source or "").lower().strip()
@@ -1253,6 +1282,272 @@ def _cross_venue_edge_hint(prob_pm: float, prob_kalshi: float) -> str:
     if diff <= -0.02:
         return "yes_pm/no_kalshi"
     return "aligned"
+
+
+def _cross_venue_arbitrage_metrics(
+    polymarket_signal: PredictionSignal,
+    kalshi_signal: PredictionSignal,
+    budget_usd: float,
+    slippage_bps: float = 0.0,
+    spread_impact: float = 0.0,
+) -> dict[str, float | bool | str]:
+    leg_a = _cross_venue_leg_metrics(
+        polymarket_signal,
+        "yes",
+        kalshi_signal,
+        "no",
+        budget_usd=budget_usd,
+        slippage_bps=slippage_bps,
+        spread_impact=spread_impact,
+        leg_name="pm_yes+ka_no",
+    )
+    leg_b = _cross_venue_leg_metrics(
+        polymarket_signal,
+        "no",
+        kalshi_signal,
+        "yes",
+        budget_usd=budget_usd,
+        slippage_bps=slippage_bps,
+        spread_impact=spread_impact,
+        leg_name="pm_no+ka_yes",
+    )
+
+    best = leg_a if float(leg_a.get("net_pnl", -1e9)) >= float(leg_b.get("net_pnl", -1e9)) else leg_b
+    net_pnl = float(best.get("net_pnl", 0.0))
+    return {
+        "is_arb": net_pnl > 0.0,
+        "net_pnl": net_pnl,
+        "fees_total": float(best.get("fees_total", 0.0)),
+        "slippage_cost": float(best.get("slippage_cost", 0.0)),
+        "gross_payout": float(best.get("gross_payout", 0.0)),
+        "total_cost": float(best.get("total_cost", 0.0)),
+        "contracts": float(best.get("contracts", 0.0)),
+        "leg": str(best.get("leg", "")),
+    }
+
+
+def _cross_venue_leg_metrics(
+    pm_signal: PredictionSignal,
+    pm_side: str,
+    ka_signal: PredictionSignal,
+    ka_side: str,
+    budget_usd: float,
+    slippage_bps: float,
+    spread_impact: float,
+    leg_name: str,
+) -> dict[str, float | str]:
+    pm_ask, pm_bid = _signal_side_quote(pm_signal, pm_side)
+    ka_ask, ka_bid = _signal_side_quote(ka_signal, ka_side)
+
+    pm_exec = _effective_buy_price(
+        ask_price=pm_ask,
+        bid_price=pm_bid,
+        slippage_bps=slippage_bps,
+        spread_impact=spread_impact,
+    )
+    ka_exec = _effective_buy_price(
+        ask_price=ka_ask,
+        bid_price=ka_bid,
+        slippage_bps=slippage_bps,
+        spread_impact=spread_impact,
+    )
+
+    if pm_exec <= 0.0 or ka_exec <= 0.0:
+        return {
+            "leg": leg_name,
+            "contracts": 0.0,
+            "total_cost": 0.0,
+            "gross_payout": 0.0,
+            "fees_total": 0.0,
+            "slippage_cost": 0.0,
+            "net_pnl": -budget_usd,
+        }
+
+    def _total_cost_usd(contracts: float) -> tuple[float, float]:
+        notional = contracts * (pm_exec + ka_exec)
+        fees = _estimate_market_fee_usd(pm_signal, contracts, pm_exec) + _estimate_market_fee_usd(
+            ka_signal,
+            contracts,
+            ka_exec,
+        )
+        return notional + fees, fees
+
+    unit_notional = pm_exec + ka_exec
+    if unit_notional <= 0:
+        return {
+            "leg": leg_name,
+            "contracts": 0.0,
+            "total_cost": 0.0,
+            "gross_payout": 0.0,
+            "fees_total": 0.0,
+            "slippage_cost": 0.0,
+            "net_pnl": -budget_usd,
+        }
+
+    lo = 0.0
+    hi = max(0.0, float(budget_usd) / unit_notional)
+    for _ in range(50):
+        mid = (lo + hi) / 2.0
+        total, _ = _total_cost_usd(mid)
+        if total <= budget_usd:
+            lo = mid
+        else:
+            hi = mid
+
+    contracts = lo
+    total_cost, fees_total = _total_cost_usd(contracts)
+    gross_payout = contracts
+    slippage_cost = contracts * max(0.0, (pm_exec - pm_ask)) + contracts * max(0.0, (ka_exec - ka_ask))
+    net_pnl = gross_payout - total_cost
+    return {
+        "leg": leg_name,
+        "contracts": contracts,
+        "total_cost": total_cost,
+        "gross_payout": gross_payout,
+        "fees_total": fees_total,
+        "slippage_cost": slippage_cost,
+        "net_pnl": net_pnl,
+    }
+
+
+def _signal_side_quote(signal: PredictionSignal, side: str) -> tuple[float, float | None]:
+    raw = signal.raw or {}
+    yes_px, no_px = _signal_yes_no_prices(signal)
+    side_clean = (side or "").strip().lower()
+
+    if side_clean == "yes":
+        ask = _first_non_none(
+            _to_prob(raw.get("yes_price")),
+            _to_prob(raw.get("yes_ask_dollars")),
+            _to_prob(raw.get("yes_ask")),
+            _to_prob(raw.get("bestAsk")),
+            yes_px,
+        )
+        bid = _first_non_none(
+            _to_prob(raw.get("yes_bid_dollars")),
+            _to_prob(raw.get("yes_bid")),
+            _to_prob(raw.get("bestBid")),
+        )
+        return _clamp_prob(ask), _clamp_prob_or_none(bid)
+
+    ask = _first_non_none(
+        _to_prob(raw.get("no_price")),
+        _to_prob(raw.get("no_ask_dollars")),
+        _to_prob(raw.get("no_ask")),
+    )
+    bid = _first_non_none(_to_prob(raw.get("no_bid_dollars")), _to_prob(raw.get("no_bid")))
+    if ask is None:
+        yes_bid = _first_non_none(
+            _to_prob(raw.get("yes_bid_dollars")),
+            _to_prob(raw.get("yes_bid")),
+            _to_prob(raw.get("bestBid")),
+        )
+        if yes_bid is not None:
+            ask = _clamp_prob(1.0 - yes_bid)
+    if bid is None:
+        yes_ask = _first_non_none(
+            _to_prob(raw.get("yes_ask_dollars")),
+            _to_prob(raw.get("yes_ask")),
+            _to_prob(raw.get("bestAsk")),
+        )
+        if yes_ask is not None:
+            bid = _clamp_prob(1.0 - yes_ask)
+    if ask is None:
+        ask = no_px
+    return _clamp_prob(ask), _clamp_prob_or_none(bid)
+
+
+def _effective_buy_price(ask_price: float, bid_price: float | None, slippage_bps: float, spread_impact: float) -> float:
+    ask = _clamp_prob(ask_price)
+    bid = _clamp_prob_or_none(bid_price)
+    spread = max(0.0, ask - bid) if bid is not None else 0.0
+    slip_bps = max(0.0, float(slippage_bps))
+    spread_weight = max(0.0, float(spread_impact))
+    bps_cost = ask * (slip_bps / 10_000.0)
+    spread_cost = spread * spread_weight
+    return _clamp_prob(ask + bps_cost + spread_cost)
+
+
+def _estimate_market_fee_usd(signal: PredictionSignal, contracts: float, execution_price: float) -> float:
+    src = (signal.source or "").strip().lower()
+    if src == "kalshi":
+        return _estimate_kalshi_fee_usd(signal, contracts, execution_price)
+    if src == "polymarket":
+        return _estimate_polymarket_fee_usd(signal, contracts, execution_price)
+    return 0.0
+
+
+def _estimate_kalshi_fee_usd(signal: PredictionSignal, contracts: float, execution_price: float) -> float:
+    if contracts <= 0:
+        return 0.0
+    raw = signal.raw or {}
+    fee_type = str(raw.get("fee_type") or raw.get("feeType") or "quadratic").strip().lower()
+    multiplier = _safe_float(raw.get("fee_multiplier") or raw.get("feeMultiplier"), default=1.0)
+    if multiplier <= 0:
+        multiplier = 1.0
+
+    p = _clamp_prob(execution_price)
+    if fee_type in {"", "quadratic"}:
+        fee = 0.07 * multiplier * contracts * p * (1.0 - p)
+        # Kalshi fee is charged in cents.
+        return math.ceil(fee * 100.0) / 100.0
+
+    fee_bps = _safe_float(
+        raw.get("fee_bps") or raw.get("feeBps") or raw.get("taker_fee_bps") or raw.get("takerFeeBps"),
+        default=0.0,
+    )
+    if fee_bps <= 0:
+        return 0.0
+    notional = contracts * p
+    return notional * fee_bps / 10_000.0
+
+
+def _estimate_polymarket_fee_usd(signal: PredictionSignal, contracts: float, execution_price: float) -> float:
+    if contracts <= 0:
+        return 0.0
+    raw = signal.raw or {}
+    enabled = _to_bool(raw.get("feesEnabled"))
+    if enabled is False:
+        return 0.0
+
+    fee_bps = _safe_float(
+        raw.get("feeRateBps")
+        or raw.get("fee_rate_bps")
+        or raw.get("takerFeeBps")
+        or raw.get("taker_fee_bps"),
+        default=0.0,
+    )
+    if fee_bps <= 0 and enabled is True:
+        fee_bps = _ARB_DEFAULT_POLYMARKET_FEE_BPS
+    if fee_bps <= 0:
+        return 0.0
+
+    notional = contracts * _clamp_prob(execution_price)
+    return notional * fee_bps / 10_000.0
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _first_non_none(*values: float | None) -> float | None:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _clamp_prob(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _clamp_prob_or_none(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return _clamp_prob(value)
 
 
 def _cross_venue_arbitrage_flag(pm_yes: float, pm_no: float, ka_yes: float, ka_no: float) -> str:
