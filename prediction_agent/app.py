@@ -164,22 +164,19 @@ class DecisionAgent:
         source_signals = self._fetch_cross_venue_signals()
         pm_all = source_signals.get("polymarket", [])
         ks_all = source_signals.get("kalshi", [])
-        polymarket_signals = [s for s in pm_all if _is_finance_signal(s)]
-        kalshi_signals = [s for s in ks_all if _is_finance_signal(s)]
-
-        if ks_all and not kalshi_signals:
-            logger.warning(
-                "No Kalshi signals classified in target universe; using all Kalshi markets for cross-venue matching fallback | total_kalshi=%s",
-                len(ks_all),
-            )
-            kalshi_signals = ks_all
+        polymarket_universe = [s for s in pm_all if _is_finance_signal(s)]
+        kalshi_universe = [s for s in ks_all if _is_finance_signal(s)]
+        polymarket_signals = [s for s in polymarket_universe if self._gate_reason(s) == "passed"]
+        kalshi_signals = [s for s in kalshi_universe if self._gate_reason(s) == "passed"]
 
         if not polymarket_signals or not kalshi_signals:
             logger.info(
-                "Cross-venue table unavailable | polymarket_total=%s polymarket_universe=%s kalshi_total=%s kalshi_universe=%s",
+                "Cross-venue table unavailable | polymarket_total=%s polymarket_universe=%s polymarket_passed=%s kalshi_total=%s kalshi_universe=%s kalshi_passed=%s",
                 len(pm_all),
+                len(polymarket_universe),
                 len(polymarket_signals),
                 len(ks_all),
+                len(kalshi_universe),
                 len(kalshi_signals),
             )
             return
@@ -208,16 +205,22 @@ class DecisionAgent:
             matches = matches[:limit]
 
         print(
-            "rank | liq_sum_usd | prob_pm | prob_kalshi | prob_diff_pp | edge_hint | sim | cat_pm | cat_ka | polymarket_id | kalshi_id | polymarket_question | kalshi_question"
+            "rank | liq_sum_usd | yes_pm | no_pm | yes_ka | no_ka | prob_diff_pp | edge_hint | sim | cat_pm | cat_ka | polymarket_id | kalshi_id | polymarket_link | kalshi_link | polymarket_question | kalshi_question"
         )
         print("-" * 260)
         for idx, m in enumerate(matches, start=1):
             edge_hint = _cross_venue_edge_hint(m.polymarket.prob_yes, m.kalshi.prob_yes)
+            pm_yes, pm_no = _signal_yes_no_prices(m.polymarket)
+            ka_yes, ka_no = _signal_yes_no_prices(m.kalshi)
+            pm_link = _signal_link(m.polymarket)
+            ka_link = _signal_link(m.kalshi)
             print(
                 f"{idx:>4} | "
                 f"{m.liquidity_sum:>11.0f} | "
-                f"{m.polymarket.prob_yes*100:>7.2f}% | "
-                f"{m.kalshi.prob_yes*100:>10.2f}% | "
+                f"{_format_price_cents(pm_yes):>6} | "
+                f"{_format_price_cents(pm_no):>6} | "
+                f"{_format_price_cents(ka_yes):>6} | "
+                f"{_format_price_cents(ka_no):>6} | "
                 f"{m.probability_diff*100:>12.2f} | "
                 f"{edge_hint:<20} | "
                 f"{m.text_similarity:>4.2f} | "
@@ -225,15 +228,19 @@ class DecisionAgent:
                 f"{_signal_category(m.kalshi):<7} | "
                 f"{m.polymarket.market_id:<12} | "
                 f"{m.kalshi.market_id:<14} | "
+                f"{pm_link[:56]:<56} | "
+                f"{ka_link[:56]:<56} | "
                 f"{(m.polymarket.question or '').strip()[:80]} | "
                 f"{(m.kalshi.question or '').strip()[:80]}"
             )
 
         logger.info(
-            "Cross-venue table complete | polymarket_total=%s polymarket_universe=%s kalshi_total=%s kalshi_used=%s matches=%s shown=%s min_similarity=%.2f",
+            "Cross-venue table complete | polymarket_total=%s polymarket_universe=%s polymarket_passed=%s kalshi_total=%s kalshi_universe=%s kalshi_passed=%s matches=%s shown=%s min_similarity=%.2f",
             len(pm_all),
+            len(polymarket_universe),
             len(polymarket_signals),
             len(ks_all),
+            len(kalshi_universe),
             len(kalshi_signals),
             total_matches,
             len(matches),
@@ -1293,7 +1300,7 @@ def main() -> None:
     parser.add_argument(
         "--show-cross-venue-table",
         action="store_true",
-        help="Print matched target-universe markets across Polymarket and Kalshi, ranked by combined liquidity",
+        help="Print matched passed markets across Polymarket and Kalshi, with yes/no prices and links",
     )
     parser.add_argument(
         "--table-limit",
