@@ -39,6 +39,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 ## Dynamic mapping knobs
 - `POLYMARKET_ONLY_MODE=true`
 - `FINANCE_ONLY_MODE=true`
+- `KALSHI_MIN_SCAN_MARKETS=1000`
 - `TOP_LIQUIDITY_FINANCE_MARKETS=5`
 - `FINANCE_PASSED_POOL_SIZE=60`
 - `DIVERSIFY_MARKETS=true`

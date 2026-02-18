@@ -58,6 +58,7 @@ class KalshiConnector(PredictionConnector):
                 updated_at = _parse_dt(market.get("updated_time") or market.get("close_time"))
 
                 event_ticker = market.get("event_ticker") or ""
+                series_ticker = market.get("series_ticker") or ""
                 slug = market.get("slug") or ""
                 if slug:
                     url = f"https://kalshi.com/markets/{slug}"
@@ -76,7 +77,17 @@ class KalshiConnector(PredictionConnector):
                         volume_24h=volume_24h,
                         liquidity=liquidity,
                         updated_at=updated_at,
-                        raw={"event_ticker": event_ticker, "close_time": market.get("close_time")},
+                        raw={
+                            "ticker": ticker,
+                            "event_ticker": event_ticker,
+                            "series_ticker": series_ticker,
+                            "title": market.get("title"),
+                            "subtitle": market.get("subtitle"),
+                            "yes_sub_title": market.get("yes_sub_title"),
+                            "no_sub_title": market.get("no_sub_title"),
+                            "status": market.get("status"),
+                            "close_time": market.get("close_time"),
+                        },
                     )
                 )
 

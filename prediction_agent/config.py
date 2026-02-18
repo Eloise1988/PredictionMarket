@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     kalshi_enabled: bool = Field(default=True, alias="KALSHI_ENABLED")
     kalshi_base_url: str = Field(default="https://api.elections.kalshi.com/trade-api/v2", alias="KALSHI_BASE_URL")
     kalshi_limit: int = Field(default=200, alias="KALSHI_LIMIT")
+    kalshi_min_scan_markets: int = Field(default=1000, alias="KALSHI_MIN_SCAN_MARKETS")
 
     alpha_vantage_api_key: str = Field(default="", alias="ALPHA_VANTAGE_API_KEY")
     alpha_vantage_base_url: str = Field(default="https://www.alphavantage.co/query", alias="ALPHA_VANTAGE_BASE_URL")

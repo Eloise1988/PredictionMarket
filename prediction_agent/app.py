@@ -146,13 +146,24 @@ class DecisionAgent:
 
     def show_cross_venue_table(self, limit: int = 0, min_similarity: float | None = None) -> None:
         source_signals = self._fetch_cross_venue_signals()
-        polymarket_signals = [s for s in source_signals.get("polymarket", []) if _is_finance_signal(s)]
-        kalshi_signals = [s for s in source_signals.get("kalshi", []) if _is_finance_signal(s)]
+        pm_all = source_signals.get("polymarket", [])
+        ks_all = source_signals.get("kalshi", [])
+        polymarket_signals = [s for s in pm_all if _is_finance_signal(s)]
+        kalshi_signals = [s for s in ks_all if _is_finance_signal(s)]
+
+        if ks_all and not kalshi_signals:
+            logger.warning(
+                "No Kalshi signals classified as finance; using all Kalshi markets for cross-venue matching fallback | total_kalshi=%s",
+                len(ks_all),
+            )
+            kalshi_signals = ks_all
 
         if not polymarket_signals or not kalshi_signals:
             logger.info(
-                "Cross-venue table unavailable | polymarket_finance=%s kalshi_finance=%s",
+                "Cross-venue table unavailable | polymarket_total=%s polymarket_finance=%s kalshi_total=%s kalshi_finance=%s",
+                len(pm_all),
                 len(polymarket_signals),
+                len(ks_all),
                 len(kalshi_signals),
             )
             return
@@ -186,8 +197,10 @@ class DecisionAgent:
             )
 
         logger.info(
-            "Cross-venue table complete | polymarket_finance=%s kalshi_finance=%s matches=%s shown=%s min_similarity=%.2f",
+            "Cross-venue table complete | polymarket_total=%s polymarket_finance=%s kalshi_total=%s kalshi_used=%s matches=%s shown=%s min_similarity=%.2f",
+            len(pm_all),
             len(polymarket_signals),
+            len(ks_all),
             len(kalshi_signals),
             total_matches,
             len(matches),
@@ -425,7 +438,10 @@ class DecisionAgent:
 
         if self.settings.kalshi_enabled:
             try:
-                connector = KalshiConnector(base_url=self.settings.kalshi_base_url, limit=self.settings.kalshi_limit)
+                connector = KalshiConnector(
+                    base_url=self.settings.kalshi_base_url,
+                    limit=max(self.settings.kalshi_limit, self.settings.kalshi_min_scan_markets),
+                )
                 out["kalshi"] = connector.fetch_signals()
             except Exception as exc:
                 logger.warning("Cross-venue fetch failed for kalshi", extra={"error": str(exc)})
@@ -701,6 +717,12 @@ def _is_finance_signal(signal: PredictionSignal) -> bool:
             str(raw.get("eventTitle") or ""),
             str(raw.get("eventSlug") or ""),
             str(raw.get("slug") or ""),
+            str(raw.get("event_ticker") or ""),
+            str(raw.get("series_ticker") or ""),
+            str(raw.get("ticker") or ""),
+            str(raw.get("subtitle") or ""),
+            str(raw.get("yes_sub_title") or ""),
+            str(raw.get("no_sub_title") or ""),
             " ".join(str(x) for x in raw.get("tags", []) if isinstance(x, str)),
         ]
     ).lower()
@@ -731,6 +753,32 @@ def _is_finance_signal(signal: PredictionSignal) -> bool:
         "tariff",
         "unemployment",
         "jobless",
+        "job growth",
+        "rate cut",
+        "rate hike",
+        "federal funds",
+        "treasury",
+        "10y",
+        "2y",
+        "bond",
+        "sp500",
+        "spx",
+        "nas100",
+        "russell",
+        "vix",
+        "dxy",
+        "dollar",
+        "commodity",
+        "gold",
+        "silver",
+        "gasoline",
+        "crude",
+        "bitcoin",
+        "btc",
+        "ethereum",
+        "eth",
+        "solana",
+        "sol",
     )
     sports_terms = (
         "world cup",
