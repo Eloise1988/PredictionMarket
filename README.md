@@ -82,11 +82,19 @@ docker compose up -d mongodb
 python3 -m prediction_agent.app --once --dry-run
 ```
 `--dry-run` skips Telegram delivery only; signal generation and valuation fetching still run.
-Inspect full target-universe ranking table (finance/economy/politics/geopolitics/tech, by liquidity) with gate status:
+Inspect full Polymarket target-universe ranking table (finance/economy/politics/geopolitics/tech, by liquidity) with gate status:
 ```bash
 python3 -m prediction_agent.app --show-finance-table
 ```
-Inspect cross-venue target-universe matches (Polymarket vs Kalshi), ranked by combined liquidity:
+Equivalent explicit source command:
+```bash
+python3 -m prediction_agent.app --show-polymarket-table
+```
+Inspect Kalshi target-universe ranking table with the same columns:
+```bash
+python3 -m prediction_agent.app --show-kalshi-table
+```
+Inspect cross-venue target-universe matches (Polymarket vs Kalshi), ranked by combined liquidity, with spread hint:
 ```bash
 python3 -m prediction_agent.app --show-cross-venue-table
 ```

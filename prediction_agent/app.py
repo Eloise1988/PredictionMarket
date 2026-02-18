@@ -100,34 +100,43 @@ class DecisionAgent:
         return self.process_signals(signals, dry_run=dry_run)
 
     def show_finance_table(self, limit: int = 0) -> None:
-        signals = self._fetch_signals()
-        if not signals:
-            logger.info("No prediction signals fetched")
+        # Backward-compatible command name: this is now the Polymarket target-universe table.
+        self.show_source_table(source="polymarket", limit=limit)
+
+    def show_source_table(self, source: str, limit: int = 0) -> None:
+        source = (source or "").strip().lower()
+        if source not in {"polymarket", "kalshi"}:
+            logger.warning("Unsupported source for table: %s", source)
+            return
+
+        source_signals = self._fetch_source_signals(source)
+        if not source_signals:
+            logger.info("No %s signals fetched", source)
             return
 
         dedup: Dict[str, PredictionSignal] = {}
-        for signal in signals:
-            if self.settings.polymarket_only_mode and signal.source != "polymarket":
-                continue
+        for signal in source_signals:
             key = f"{signal.source}:{signal.market_id}"
             existing = dedup.get(key)
             if existing is None or signal.updated_at > existing.updated_at:
                 dedup[key] = signal
 
         ranked = sorted(dedup.values(), key=lambda s: (s.liquidity, s.volume_24h), reverse=True)
-        finance = [s for s in ranked if _is_finance_signal(s)]
+        universe = [s for s in ranked if _is_finance_signal(s)]
         if limit > 0:
-            finance = finance[:limit]
+            universe = universe[:limit]
 
-        print("rank | liq_usd | vol24h_usd | prob_yes | gate | source | market_id | question")
-        print("-" * 180)
-        for idx, s in enumerate(finance, start=1):
+        print("rank | liq_usd | vol24h_usd | prob_yes | category | gate | source | market_id | question")
+        print("-" * 200)
+        for idx, s in enumerate(universe, start=1):
             gate = self._gate_reason(s)
+            category = _signal_category(s)
             print(
                 f"{idx:>4} | "
                 f"{s.liquidity:>10.0f} | "
                 f"{s.volume_24h:>10.0f} | "
                 f"{s.prob_yes*100:>7.2f}% | "
+                f"{category:<11} | "
                 f"{gate:<11} | "
                 f"{s.source:<10} | "
                 f"{s.market_id:<12} | "
@@ -135,11 +144,12 @@ class DecisionAgent:
             )
 
         logger.info(
-            "Target-universe table complete | total_input=%s source_filtered=%s universe_ranked=%s shown=%s",
-            len(signals),
+            "Source table complete | source=%s total_input=%s source_filtered=%s universe_ranked=%s shown=%s",
+            source,
+            len(source_signals),
             len(dedup),
             len([s for s in ranked if _is_finance_signal(s)]),
-            len(finance),
+            len(universe),
         )
 
     def show_cross_venue_table(self, limit: int = 0, min_similarity: float | None = None) -> None:
@@ -151,7 +161,7 @@ class DecisionAgent:
 
         if ks_all and not kalshi_signals:
             logger.warning(
-                "No Kalshi signals classified as finance; using all Kalshi markets for cross-venue matching fallback | total_kalshi=%s",
+                "No Kalshi signals classified in target universe; using all Kalshi markets for cross-venue matching fallback | total_kalshi=%s",
                 len(ks_all),
             )
             kalshi_signals = ks_all
@@ -190,17 +200,21 @@ class DecisionAgent:
             matches = matches[:limit]
 
         print(
-            "rank | liq_sum_usd | prob_pm | prob_kalshi | prob_diff_pp | sim | polymarket_id | kalshi_id | polymarket_question | kalshi_question"
+            "rank | liq_sum_usd | prob_pm | prob_kalshi | prob_diff_pp | edge_hint | sim | cat_pm | cat_ka | polymarket_id | kalshi_id | polymarket_question | kalshi_question"
         )
-        print("-" * 220)
+        print("-" * 260)
         for idx, m in enumerate(matches, start=1):
+            edge_hint = _cross_venue_edge_hint(m.polymarket.prob_yes, m.kalshi.prob_yes)
             print(
                 f"{idx:>4} | "
                 f"{m.liquidity_sum:>11.0f} | "
                 f"{m.polymarket.prob_yes*100:>7.2f}% | "
                 f"{m.kalshi.prob_yes*100:>10.2f}% | "
                 f"{m.probability_diff*100:>12.2f} | "
+                f"{edge_hint:<20} | "
                 f"{m.text_similarity:>4.2f} | "
+                f"{_signal_category(m.polymarket):<7} | "
+                f"{_signal_category(m.kalshi):<7} | "
                 f"{m.polymarket.market_id:<12} | "
                 f"{m.kalshi.market_id:<14} | "
                 f"{(m.polymarket.question or '').strip()[:80]} | "
@@ -432,6 +446,29 @@ class DecisionAgent:
                 )
 
         return all_signals
+
+    def _fetch_source_signals(self, source: str) -> List[PredictionSignal]:
+        source = (source or "").strip().lower()
+        if source == "polymarket":
+            if not self.settings.polymarket_enabled:
+                return []
+            connector = PolymarketConnector(
+                gamma_base_url=self.settings.polymarket_gamma_base_url,
+                clob_base_url=self.settings.polymarket_clob_base_url,
+                limit=max(self.settings.polymarket_limit, self.settings.polymarket_min_scan_markets),
+            )
+            return connector.fetch_signals()
+
+        if source == "kalshi":
+            if not self.settings.kalshi_enabled:
+                return []
+            connector = KalshiConnector(
+                base_url=self.settings.kalshi_base_url,
+                limit=max(self.settings.kalshi_limit, self.settings.kalshi_min_scan_markets),
+            )
+            return connector.fetch_signals()
+
+        return []
 
     def _fetch_cross_venue_signals(self) -> Dict[str, List[PredictionSignal]]:
         out: Dict[str, List[PredictionSignal]] = {"polymarket": [], "kalshi": []}
@@ -718,7 +755,223 @@ def _has_valuation_metrics(snapshot: EquitySnapshot | None) -> bool:
     )
 
 
+_TARGET_CATEGORY_ORDER = (
+    "geopolitics",
+    "politics",
+    "economy",
+    "finance",
+    "tech",
+)
+
+_FINANCE_TERMS = (
+    "fed",
+    "fomc",
+    "interest rate",
+    "rate cut",
+    "rate hike",
+    "federal funds",
+    "treasury",
+    "yield",
+    "bond",
+    "stock",
+    "equity",
+    "etf",
+    "s&p",
+    "nasdaq",
+    "dow",
+    "sp500",
+    "spx",
+    "nas100",
+    "russell",
+    "vix",
+    "dxy",
+    "dollar",
+    "bitcoin",
+    "btc",
+    "ethereum",
+    "eth",
+    "crypto",
+    "solana",
+    "sol",
+    "commodity",
+    "gold",
+    "silver",
+    "oil",
+    "brent",
+    "wti",
+    "gasoline",
+    "crude",
+    "earnings",
+)
+
+_ECONOMY_TERMS = (
+    "economy",
+    "economic",
+    "inflation",
+    "cpi",
+    "pce",
+    "gdp",
+    "recession",
+    "unemployment",
+    "jobless",
+    "job growth",
+    "payrolls",
+)
+
+_POLITICS_TERMS = (
+    "election",
+    "president",
+    "senate",
+    "house",
+    "congress",
+    "white house",
+    "supreme court",
+    "cabinet",
+    "nominate",
+    "nomination",
+    "policy",
+    "government",
+    "fiscal",
+    "spending bill",
+    "executive order",
+    "prime minister",
+    "parliament",
+    "party control",
+    "midterm",
+    "pardon",
+)
+
+_GEOPOLITICS_TERMS = (
+    "war",
+    "conflict",
+    "ceasefire",
+    "sanction",
+    "tariff",
+    "trade war",
+    "nato",
+    "iran",
+    "israel",
+    "gaza",
+    "ukraine",
+    "russia",
+    "china",
+    "taiwan",
+    "north korea",
+    "south china sea",
+    "strait",
+    "missile",
+    "invasion",
+)
+
+_TECH_TERMS = (
+    "ai",
+    "artificial intelligence",
+    "semiconductor",
+    "chip",
+    "nvidia",
+    "openai",
+    "microsoft",
+    "google",
+    "meta",
+    "apple",
+    "amazon",
+    "tesla",
+    "software",
+    "cloud",
+    "cybersecurity",
+    "robotaxi",
+    "market cap",
+    "fdv",
+    "launch",
+)
+
+_SPORTS_TERMS = (
+    "world cup",
+    "fifa",
+    "premier league",
+    "english premier league",
+    "la liga",
+    "serie a",
+    "bundesliga",
+    "division",
+    "stanley cup",
+    "nba",
+    "nfl",
+    "mlb",
+    "nhl",
+    "super bowl",
+    "olympic",
+    "champions league",
+    "tournament",
+    "playoff",
+    "match",
+    "soccer",
+    "football club",
+    "wins the",
+    "win the",
+    "to win the",
+    "championship",
+)
+
+_ENTERTAINMENT_TERMS = (
+    "academy awards",
+    "oscars",
+    "best picture",
+    "grammy",
+    "emmy",
+    "golden globe",
+    "movie",
+    "film",
+    "actor",
+    "actress",
+)
+
+
 def _is_finance_signal(signal: PredictionSignal) -> bool:
+    # Legacy function name retained. It now means: "in target universe".
+    return _signal_category(signal) in _TARGET_CATEGORY_ORDER
+
+
+def _signal_category(signal: PredictionSignal) -> str:
+    raw_text, question = _signal_text_blob(signal)
+    combined = f"{raw_text} {question}".strip()
+    if not combined:
+        return "other"
+
+    if _contains_any(combined, _SPORTS_TERMS):
+        return "excluded"
+    if _contains_any(combined, _ENTERTAINMENT_TERMS):
+        return "excluded"
+    if _looks_like_competition_market(question):
+        return "excluded"
+
+    # Prefer explicit metadata categories when present.
+    if raw_text.strip():
+        if _contains_any(raw_text, ("geopolitics", "geopolitical", "international", "war")):
+            return "geopolitics"
+        if _contains_any(raw_text, ("politics", "political", "government", "election")):
+            return "politics"
+        if _contains_any(raw_text, ("economy", "economic", "macro", "inflation", "employment")):
+            return "economy"
+        if _contains_any(raw_text, ("finance", "markets", "business", "crypto", "rates")):
+            return "finance"
+        if _contains_any(raw_text, ("technology", "tech", "ai", "software")):
+            return "tech"
+
+    if _contains_any(combined, _GEOPOLITICS_TERMS):
+        return "geopolitics"
+    if _contains_any(combined, _POLITICS_TERMS):
+        return "politics"
+    if _contains_any(combined, _ECONOMY_TERMS):
+        return "economy"
+    if _contains_any(combined, _FINANCE_TERMS):
+        return "finance"
+    if _contains_any(combined, _TECH_TERMS):
+        return "tech"
+    return "other"
+
+
+def _signal_text_blob(signal: PredictionSignal) -> tuple[str, str]:
     raw = signal.raw or {}
     raw_text = " ".join(
         [
@@ -731,6 +984,7 @@ def _is_finance_signal(signal: PredictionSignal) -> bool:
             str(raw.get("event_ticker") or ""),
             str(raw.get("series_ticker") or ""),
             str(raw.get("ticker") or ""),
+            str(raw.get("title") or ""),
             str(raw.get("subtitle") or ""),
             str(raw.get("yes_sub_title") or ""),
             str(raw.get("no_sub_title") or ""),
@@ -738,188 +992,11 @@ def _is_finance_signal(signal: PredictionSignal) -> bool:
         ]
     ).lower()
     question = (signal.question or "").lower()
+    return raw_text, question
 
-    finance_terms = (
-        "fed",
-        "fomc",
-        "interest rate",
-        "inflation",
-        "cpi",
-        "pce",
-        "gdp",
-        "recession",
-        "treasury",
-        "yield",
-        "stock",
-        "s&p",
-        "nasdaq",
-        "dow",
-        "bitcoin",
-        "ethereum",
-        "crypto",
-        "oil",
-        "brent",
-        "wti",
-        "earnings",
-        "tariff",
-        "unemployment",
-        "jobless",
-        "job growth",
-        "rate cut",
-        "rate hike",
-        "federal funds",
-        "treasury",
-        "10y",
-        "2y",
-        "bond",
-        "sp500",
-        "spx",
-        "nas100",
-        "russell",
-        "vix",
-        "dxy",
-        "dollar",
-        "commodity",
-        "gold",
-        "silver",
-        "gasoline",
-        "crude",
-        "bitcoin",
-        "btc",
-        "ethereum",
-        "eth",
-        "solana",
-        "sol",
-    )
-    politics_terms = (
-        "election",
-        "president",
-        "senate",
-        "house",
-        "congress",
-        "white house",
-        "supreme court",
-        "cabinet",
-        "nominate",
-        "nomination",
-        "policy",
-        "government",
-        "fiscal",
-        "spending bill",
-        "executive order",
-    )
-    geopolitics_terms = (
-        "war",
-        "conflict",
-        "ceasefire",
-        "sanction",
-        "tariff",
-        "trade war",
-        "nato",
-        "iran",
-        "israel",
-        "gaza",
-        "ukraine",
-        "russia",
-        "china",
-        "taiwan",
-        "north korea",
-        "south china sea",
-        "strait",
-        "missile",
-    )
-    tech_terms = (
-        "ai",
-        "artificial intelligence",
-        "semiconductor",
-        "chip",
-        "nvidia",
-        "openai",
-        "microsoft",
-        "google",
-        "meta",
-        "apple",
-        "amazon",
-        "tesla",
-        "software",
-        "cloud",
-        "cybersecurity",
-        "robotaxi",
-    )
-    sports_terms = (
-        "world cup",
-        "fifa",
-        "premier league",
-        "english premier league",
-        "la liga",
-        "serie a",
-        "bundesliga",
-        "division",
-        "stanley cup",
-        "nba",
-        "nfl",
-        "mlb",
-        "nhl",
-        "super bowl",
-        "olympic",
-        "champions league",
-        "tournament",
-        "playoff",
-        "match",
-        "soccer",
-        "football club",
-        "wins the",
-        "win the",
-        "to win the",
-        "championship",
-    )
 
-    # Hard reject sports-like contracts even if metadata is noisy.
-    if any(x in raw_text for x in sports_terms) or any(x in question for x in sports_terms):
-        return False
-
-    # If category metadata exists, trust explicit finance tags.
-    if raw_text.strip() and any(
-        x in raw_text
-        for x in (
-            "finance",
-            "markets",
-            "economy",
-            "business",
-            "crypto",
-            "macro",
-            "rates",
-            "inflation",
-            "politics",
-            "political",
-            "government",
-            "geopolitics",
-            "geopolitical",
-            "technology",
-            "tech",
-        )
-    ):
-        return True
-
-    if any(x in question for x in finance_terms):
-        return True
-    if any(x in question for x in politics_terms):
-        return True
-    if any(x in question for x in geopolitics_terms):
-        return True
-    if any(x in question for x in tech_terms):
-        return True
-    if any(x in raw_text for x in politics_terms):
-        return True
-    if any(x in raw_text for x in geopolitics_terms):
-        return True
-    if any(x in raw_text for x in tech_terms):
-        return True
-
-    if _looks_like_competition_market(question):
-        return False
-
-    return False
+def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
 
 
 def _looks_like_competition_market(question: str) -> bool:
@@ -993,6 +1070,16 @@ def _jaccard_similarity(a: set[str], b: set[str]) -> float:
     return inter / union
 
 
+def _cross_venue_edge_hint(prob_pm: float, prob_kalshi: float) -> str:
+    # Diagnostic spread hint only; not execution advice.
+    diff = float(prob_pm) - float(prob_kalshi)
+    if diff >= 0.02:
+        return "yes_kalshi/no_pm"
+    if diff <= -0.02:
+        return "yes_pm/no_kalshi"
+    return "aligned"
+
+
 def _format_telegram_message(alert: AlertPayload) -> str:
     lines = ["Prediction Market Equity Signals", ""]
     for i, idea in enumerate(alert.ideas, start=1):
@@ -1028,15 +1115,25 @@ def main() -> None:
         help="Print target-universe markets (finance/economy/politics/geopolitics/tech) ranked by liquidity with gate status, then exit",
     )
     parser.add_argument(
+        "--show-polymarket-table",
+        action="store_true",
+        help="Print Polymarket target-universe table ranked by liquidity with gate status, then exit",
+    )
+    parser.add_argument(
+        "--show-kalshi-table",
+        action="store_true",
+        help="Print Kalshi target-universe table ranked by liquidity with gate status, then exit",
+    )
+    parser.add_argument(
         "--show-cross-venue-table",
         action="store_true",
-        help="Print matched finance markets across Polymarket and Kalshi, ranked by combined liquidity",
+        help="Print matched target-universe markets across Polymarket and Kalshi, ranked by combined liquidity",
     )
     parser.add_argument(
         "--table-limit",
         type=int,
         default=0,
-        help="Optional max rows for --show-finance-table (0 = all)",
+        help="Optional max rows for source-table commands (0 = all)",
     )
     parser.add_argument(
         "--cross-min-similarity",
@@ -1049,6 +1146,14 @@ def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     agent = DecisionAgent()
+
+    if args.show_polymarket_table:
+        agent.show_source_table(source="polymarket", limit=max(0, args.table_limit))
+        return
+
+    if args.show_kalshi_table:
+        agent.show_source_table(source="kalshi", limit=max(0, args.table_limit))
+        return
 
     if args.show_finance_table:
         agent.show_finance_table(limit=max(0, args.table_limit))
