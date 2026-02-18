@@ -126,11 +126,12 @@ class DecisionAgent:
         if limit > 0:
             universe = universe[:limit]
 
-        print("rank | liq_usd | vol24h_usd | prob_yes | category | gate | source | market_id | question")
-        print("-" * 200)
+        print("rank | liq_usd | vol24h_usd | prob_yes | category | gate | source | market_id | link | question")
+        print("-" * 260)
         for idx, s in enumerate(universe, start=1):
             gate = self._gate_reason(s)
             category = _signal_category(s)
+            link = _signal_link(s)
             print(
                 f"{idx:>4} | "
                 f"{s.liquidity:>10.0f} | "
@@ -140,6 +141,7 @@ class DecisionAgent:
                 f"{gate:<11} | "
                 f"{s.source:<10} | "
                 f"{s.market_id:<12} | "
+                f"{link[:84]:<84} | "
                 f"{(s.question or '').strip()[:160]}"
             )
 
@@ -996,7 +998,49 @@ def _signal_text_blob(signal: PredictionSignal) -> tuple[str, str]:
 
 
 def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
-    return any(term in text for term in terms)
+    normalized = _normalize_text(text)
+    tokens = set(normalized.split())
+    for term in terms:
+        term_norm = _normalize_text(term)
+        if not term_norm:
+            continue
+        if " " in term_norm:
+            if f" {term_norm} " in f" {normalized} ":
+                return True
+        else:
+            if term_norm in tokens:
+                return True
+    return False
+
+
+def _normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", (text or "").lower())).strip()
+
+
+def _signal_link(signal: PredictionSignal) -> str:
+    raw = signal.raw or {}
+    src = (signal.source or "").lower().strip()
+
+    if src == "polymarket":
+        event_slug = str(raw.get("eventSlug") or raw.get("slug") or "").strip()
+        if event_slug:
+            return f"https://polymarket.com/event/{event_slug}"
+        if signal.url:
+            return signal.url
+        return "https://polymarket.com"
+
+    if src == "kalshi":
+        slug = str(raw.get("slug") or "").strip()
+        if slug:
+            return f"https://kalshi.com/markets/{slug}"
+        event_ticker = str(raw.get("event_ticker") or "").strip()
+        if event_ticker:
+            return f"https://kalshi.com/markets/{event_ticker.lower()}"
+        if signal.url:
+            return signal.url
+        return "https://kalshi.com/markets"
+
+    return signal.url or ""
 
 
 def _looks_like_competition_market(question: str) -> bool:

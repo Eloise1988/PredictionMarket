@@ -81,6 +81,7 @@ class KalshiConnector(PredictionConnector):
                             "ticker": ticker,
                             "event_ticker": event_ticker,
                             "series_ticker": series_ticker,
+                            "slug": slug,
                             "title": market.get("title"),
                             "subtitle": market.get("subtitle"),
                             "yes_sub_title": market.get("yes_sub_title"),
