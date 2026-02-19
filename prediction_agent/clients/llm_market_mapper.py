@@ -251,8 +251,6 @@ class LLMMarketMapper:
                     "rank": int(_to_float(row.get("rank"))),
                     "market_id": market_id,
                     "question": question,
-                    "liquidity": round(_to_float(row.get("liquidity")), 2),
-                    "prob_yes": round(_clamp(_to_float(row.get("prob_yes")), 0.0, 1.0), 4),
                 }
             )
 
@@ -269,8 +267,6 @@ class LLMMarketMapper:
                     "rank": int(_to_float(row.get("rank"))),
                     "market_id": market_id,
                     "question": question,
-                    "liquidity": round(_to_float(row.get("liquidity")), 2),
-                    "prob_yes": round(_clamp(_to_float(row.get("prob_yes")), 0.0, 1.0), 4),
                 }
             )
 
@@ -288,34 +284,55 @@ class LLMMarketMapper:
             "Return strict JSON only with schema: "
             "{\"matches\":[{\"polymarket_id\":\"...\",\"kalshi_id\":\"...\",\"strength\":0.0-1.0,\"rationale\":\"...\"}]}"
         )
-        user = json.dumps(
-            {
-                "min_strength": round(_clamp(float(min_strength), 0.0, 1.0), 3),
-                "polymarket": pm_rows,
-                "kalshi": ks_rows,
-            },
-            separators=(",", ":"),
-        )
-
-        try:
-            response = self._client.responses.create(
-                model=self.model,
-                input=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-            )
-            payload = _extract_json((response.output_text or "").strip())
-            return _parse_cross_venue_matches_from_lists(
-                payload,
-                allowed_polymarket_ids=allowed_pm_ids,
-                allowed_kalshi_ids=allowed_ka_ids,
+        # Keep prompt size bounded by chunking Kalshi list while always providing
+        # the full Polymarket list as anchor candidates.
+        all_matches: List[CrossVenueStrongMatch] = []
+        for ks_chunk in _chunked(ks_rows, _LLM_STRONG_MAX_KALSHI_PER_REQUEST):
+            allowed_ka_chunk_ids = {str(row.get("market_id") or "").strip() for row in ks_chunk}
+            user = _build_cross_venue_text_list_prompt(
                 min_strength=min_strength,
-                max_matches=max_matches,
+                polymarket_rows=pm_rows,
+                kalshi_rows=ks_chunk,
             )
-        except Exception as exc:
-            logger.warning("LLM cross-venue strong matcher (list mode) failed: %s", str(exc))
+
+            try:
+                response = self._client.responses.create(
+                    model=self.model,
+                    input=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                )
+                payload = _extract_json((response.output_text or "").strip())
+                all_matches.extend(
+                    _parse_cross_venue_matches_from_lists(
+                        payload,
+                        allowed_polymarket_ids=allowed_pm_ids,
+                        allowed_kalshi_ids=allowed_ka_chunk_ids,
+                        min_strength=min_strength,
+                        max_matches=max_matches,
+                    )
+                )
+            except Exception as exc:
+                logger.warning("LLM cross-venue strong matcher (list mode) failed: %s", str(exc))
+                continue
+
+        if not all_matches:
             return []
+
+        all_matches.sort(key=lambda m: (float(m.strength), m.polymarket_id, m.kalshi_id), reverse=True)
+        out: List[CrossVenueStrongMatch] = []
+        used_pm: set[str] = set()
+        used_ka: set[str] = set()
+        for row in all_matches:
+            if row.polymarket_id in used_pm or row.kalshi_id in used_ka:
+                continue
+            used_pm.add(row.polymarket_id)
+            used_ka.add(row.kalshi_id)
+            out.append(row)
+            if len(out) >= max_matches:
+                break
+        return out
 
 
 def _extract_json(text: str) -> dict:
@@ -493,6 +510,37 @@ def _parse_cross_venue_matches_from_lists(
     return out
 
 
+def _build_cross_venue_text_list_prompt(
+    min_strength: float,
+    polymarket_rows: List[Dict[str, object]],
+    kalshi_rows: List[Dict[str, object]],
+) -> str:
+    min_s = round(_clamp(float(min_strength), 0.0, 1.0), 3)
+    pm_lines = "\n".join(_format_market_line(row) for row in polymarket_rows)
+    ks_lines = "\n".join(_format_market_line(row) for row in kalshi_rows)
+    return (
+        f"Minimum strength: {min_s}\n\n"
+        "Polymarket list (format: [id] question):\n"
+        f"{pm_lines}\n\n"
+        "Kalshi list (format: [id] question):\n"
+        f"{ks_lines}\n\n"
+        "Return JSON only."
+    )
+
+
+def _format_market_line(row: Dict[str, object]) -> str:
+    market_id = str(row.get("market_id") or "").strip()
+    question = str(row.get("question") or "").strip()
+    if len(question) > _LLM_STRONG_MAX_QUESTION_CHARS:
+        question = f"{question[:_LLM_STRONG_MAX_QUESTION_CHARS].rstrip()}..."
+    return f"[{market_id}] {question}"
+
+
+def _chunked(rows: List[Dict[str, object]], size: int) -> List[List[Dict[str, object]]]:
+    n = max(1, int(size))
+    return [rows[i : i + n] for i in range(0, len(rows), n)]
+
+
 def _to_float(value: object) -> float:
     try:
         return float(value)
@@ -502,3 +550,7 @@ def _to_float(value: object) -> float:
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+_LLM_STRONG_MAX_KALSHI_PER_REQUEST = 80
+_LLM_STRONG_MAX_QUESTION_CHARS = 220

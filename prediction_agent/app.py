@@ -401,8 +401,6 @@ class DecisionAgent:
                 "rank": idx,
                 "market_id": s.market_id,
                 "question": (s.question or "").strip(),
-                "liquidity": round(float(s.liquidity), 2),
-                "prob_yes": round(float(s.prob_yes), 4),
             }
             for idx, s in enumerate(polymarket_signals, start=1)
         ]
@@ -411,8 +409,6 @@ class DecisionAgent:
                 "rank": idx,
                 "market_id": s.market_id,
                 "question": (s.question or "").strip(),
-                "liquidity": round(float(s.liquidity), 2),
-                "prob_yes": round(float(s.prob_yes), 4),
             }
             for idx, s in enumerate(kalshi_signals, start=1)
         ]
