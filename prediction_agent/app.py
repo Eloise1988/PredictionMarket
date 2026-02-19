@@ -166,26 +166,65 @@ class DecisionAgent:
             len(passed_universe),
         )
 
-    def show_cross_venue_table(self, limit: int = 0, min_similarity: float | None = None) -> None:
+    def _prepare_source_passed_signals(
+        self,
+        source_signals: List[PredictionSignal],
+    ) -> tuple[List[PredictionSignal], Dict[str, float]]:
+        dedup: Dict[str, PredictionSignal] = {}
+        for signal in source_signals:
+            key = f"{signal.source}:{signal.market_id}"
+            existing = dedup.get(key)
+            if existing is None or signal.updated_at > existing.updated_at:
+                dedup[key] = signal
+
+        ranked = sorted(dedup.values(), key=lambda s: (s.updated_at, s.liquidity, s.volume_24h), reverse=True)
+        universe = [s for s in ranked if _is_finance_signal(s)]
+        passed = [s for s in universe if self._gate_reason(s) == "passed"]
+        return passed, {
+            "total_input": float(len(source_signals)),
+            "source_filtered": float(len(dedup)),
+            "universe_ranked": float(len(universe)),
+            "passed": float(len(passed)),
+        }
+
+    def _get_cross_venue_source_lists(self) -> tuple[List[PredictionSignal], List[PredictionSignal], Dict[str, float]]:
         source_signals = self._fetch_cross_venue_signals()
         pm_all = source_signals.get("polymarket", [])
         ks_all = source_signals.get("kalshi", [])
-        polymarket_universe = [s for s in pm_all if _is_finance_signal(s)]
-        kalshi_universe = [s for s in ks_all if _is_finance_signal(s)]
-        polymarket_signals = [s for s in polymarket_universe if self._gate_reason(s) == "passed"]
-        kalshi_signals = [s for s in kalshi_universe if self._gate_reason(s) == "passed"]
+
+        pm_passed, pm_stats = self._prepare_source_passed_signals(pm_all)
+        ks_passed, ks_stats = self._prepare_source_passed_signals(ks_all)
+
+        stats = {
+            "polymarket_total": pm_stats.get("total_input", 0.0),
+            "polymarket_source_filtered": pm_stats.get("source_filtered", 0.0),
+            "polymarket_universe": pm_stats.get("universe_ranked", 0.0),
+            "polymarket_passed": pm_stats.get("passed", 0.0),
+            "kalshi_total": ks_stats.get("total_input", 0.0),
+            "kalshi_source_filtered": ks_stats.get("source_filtered", 0.0),
+            "kalshi_universe": ks_stats.get("universe_ranked", 0.0),
+            "kalshi_passed": ks_stats.get("passed", 0.0),
+        }
+        return pm_passed, ks_passed, stats
+
+    def _get_cross_venue_rows(self, min_similarity: float | None = None) -> tuple[List[Dict], Dict[str, float]]:
+        polymarket_signals, kalshi_signals, base_stats = self._get_cross_venue_source_lists()
 
         if not polymarket_signals or not kalshi_signals:
             logger.info(
-                "Cross-venue table unavailable | polymarket_total=%s polymarket_universe=%s polymarket_passed=%s kalshi_total=%s kalshi_universe=%s kalshi_passed=%s",
-                len(pm_all),
-                len(polymarket_universe),
+                "Cross-venue rows unavailable | polymarket_total=%s polymarket_universe=%s polymarket_passed=%s kalshi_total=%s kalshi_universe=%s kalshi_passed=%s",
+                int(base_stats.get("polymarket_total", 0.0)),
+                int(base_stats.get("polymarket_universe", 0.0)),
                 len(polymarket_signals),
-                len(ks_all),
-                len(kalshi_universe),
+                int(base_stats.get("kalshi_total", 0.0)),
+                int(base_stats.get("kalshi_universe", 0.0)),
                 len(kalshi_signals),
             )
-            return
+            return [], {
+                **base_stats,
+                "matches": 0.0,
+                "min_similarity": 0.0,
+            }
 
         threshold = self.settings.cross_venue_min_similarity if min_similarity is None else min_similarity
         matches = match_cross_venue_markets(
@@ -206,7 +245,6 @@ class DecisionAgent:
                     float(threshold),
                     relaxed,
                 )
-        total_matches = len(matches)
 
         rows = []
         for m in matches:
@@ -242,6 +280,17 @@ class DecisionAgent:
             ),
             reverse=True,
         )
+        return rows, {
+            **base_stats,
+            "matches": float(len(matches)),
+            "min_similarity": max(0.0, min(1.0, float(threshold))),
+        }
+
+    def show_cross_venue_table(self, limit: int = 0, min_similarity: float | None = None) -> None:
+        rows, stats = self._get_cross_venue_rows(min_similarity=min_similarity)
+        if not rows:
+            return
+
         if limit > 0:
             rows = rows[:limit]
 
@@ -280,110 +329,204 @@ class DecisionAgent:
 
         logger.info(
             "Cross-venue table complete | polymarket_total=%s polymarket_universe=%s polymarket_passed=%s kalshi_total=%s kalshi_universe=%s kalshi_passed=%s matches=%s shown=%s min_similarity=%.2f",
-            len(pm_all),
-            len(polymarket_universe),
-            len(polymarket_signals),
-            len(ks_all),
-            len(kalshi_universe),
-            len(kalshi_signals),
-            total_matches,
+            int(stats.get("polymarket_total", 0.0)),
+            int(stats.get("polymarket_universe", 0.0)),
+            int(stats.get("polymarket_passed", 0.0)),
+            int(stats.get("kalshi_total", 0.0)),
+            int(stats.get("kalshi_universe", 0.0)),
+            int(stats.get("kalshi_passed", 0.0)),
+            int(stats.get("matches", 0.0)),
             len(rows),
-            max(0.0, min(1.0, float(threshold))),
+            float(stats.get("min_similarity", 0.0)),
         )
 
     def show_cross_venue_question_lists(self, limit: int = 0, min_similarity: float | None = None) -> None:
-        source_signals = self._fetch_cross_venue_signals()
-        pm_all = source_signals.get("polymarket", [])
-        ks_all = source_signals.get("kalshi", [])
-        polymarket_universe = [s for s in pm_all if _is_finance_signal(s)]
-        kalshi_universe = [s for s in ks_all if _is_finance_signal(s)]
-        polymarket_signals = [s for s in polymarket_universe if self._gate_reason(s) == "passed"]
-        kalshi_signals = [s for s in kalshi_universe if self._gate_reason(s) == "passed"]
-
-        if not polymarket_signals or not kalshi_signals:
+        _ = min_similarity  # kept for CLI compatibility; pre-match question lists do not use similarity.
+        pm_passed, ks_passed, stats = self._get_cross_venue_source_lists()
+        if not pm_passed and not ks_passed:
             logger.info(
                 "Cross-venue question lists unavailable | polymarket_total=%s polymarket_universe=%s polymarket_passed=%s kalshi_total=%s kalshi_universe=%s kalshi_passed=%s",
-                len(pm_all),
-                len(polymarket_universe),
-                len(polymarket_signals),
-                len(ks_all),
-                len(kalshi_universe),
-                len(kalshi_signals),
+                int(stats.get("polymarket_total", 0.0)),
+                int(stats.get("polymarket_universe", 0.0)),
+                int(stats.get("polymarket_passed", 0.0)),
+                int(stats.get("kalshi_total", 0.0)),
+                int(stats.get("kalshi_universe", 0.0)),
+                int(stats.get("kalshi_passed", 0.0)),
             )
             return
 
-        threshold = self.settings.cross_venue_min_similarity if min_similarity is None else min_similarity
-        matches = match_cross_venue_markets(
-            polymarket_signals=polymarket_signals,
-            kalshi_signals=kalshi_signals,
-            min_similarity=max(0.0, min(1.0, float(threshold))),
-        )
-        if not matches and threshold > 0.10:
-            relaxed = max(0.10, round(float(threshold) * 0.55, 2))
-            matches = match_cross_venue_markets(
-                polymarket_signals=polymarket_signals,
-                kalshi_signals=kalshi_signals,
-                min_similarity=relaxed,
-            )
-            if matches:
-                logger.info(
-                    "Cross-venue question-list fallback used | original_min_similarity=%.2f relaxed_min_similarity=%.2f",
-                    float(threshold),
-                    relaxed,
-                )
-        total_matches = len(matches)
-
-        rows = []
-        for m in matches:
-            arb = _cross_venue_arbitrage_metrics(
-                m.polymarket,
-                m.kalshi,
-                budget_usd=_ARB_BUDGET_USD,
-                slippage_bps=_ARB_SLIPPAGE_BPS,
-                spread_impact=_ARB_SPREAD_IMPACT,
-            )
-            rows.append(
-                {
-                    "match": m,
-                    "arb_pnl": float(arb.get("net_pnl", 0.0)),
-                }
-            )
-
-        rows.sort(
-            key=lambda r: (
-                float(r["arb_pnl"]),
-                float(r["match"].liquidity_sum),
-                float(r["match"].text_similarity),
-            ),
-            reverse=True,
-        )
-        if limit > 0:
-            rows = rows[:limit]
+        pm_rows = pm_passed[:limit] if limit > 0 else pm_passed
+        ks_rows = ks_passed[:limit] if limit > 0 else ks_passed
 
         print("polymarket_questions")
         print("-" * 200)
-        for idx, row in enumerate(rows, start=1):
-            m = row["match"]
-            print(f"{idx:>4} | {m.polymarket.market_id:<18} | {(m.polymarket.question or '').strip()}")
+        for idx, s in enumerate(pm_rows, start=1):
+            print(f"{idx:>4} | {s.market_id:<18} | {(s.question or '').strip()}")
 
         print("")
         print("kalshi_questions")
         print("-" * 200)
-        for idx, row in enumerate(rows, start=1):
-            m = row["match"]
-            print(f"{idx:>4} | {m.kalshi.market_id:<18} | {(m.kalshi.question or '').strip()}")
+        for idx, s in enumerate(ks_rows, start=1):
+            print(f"{idx:>4} | {s.market_id:<18} | {(s.question or '').strip()}")
 
         logger.info(
-            "Cross-venue question lists complete | polymarket_total=%s polymarket_universe=%s polymarket_passed=%s kalshi_total=%s kalshi_universe=%s kalshi_passed=%s matches=%s shown=%s min_similarity=%.2f",
-            len(pm_all),
-            len(polymarket_universe),
-            len(polymarket_signals),
-            len(ks_all),
-            len(kalshi_universe),
-            len(kalshi_signals),
-            total_matches,
-            len(rows),
-            max(0.0, min(1.0, float(threshold))),
+            "Cross-venue question lists complete | polymarket_total=%s polymarket_universe=%s polymarket_passed=%s polymarket_shown=%s kalshi_total=%s kalshi_universe=%s kalshi_passed=%s kalshi_shown=%s",
+            int(stats.get("polymarket_total", 0.0)),
+            int(stats.get("polymarket_universe", 0.0)),
+            int(stats.get("polymarket_passed", 0.0)),
+            len(pm_rows),
+            int(stats.get("kalshi_total", 0.0)),
+            int(stats.get("kalshi_universe", 0.0)),
+            int(stats.get("kalshi_passed", 0.0)),
+            len(ks_rows),
+        )
+
+    def show_cross_venue_llm_strong_table(
+        self,
+        limit: int = 0,
+        min_similarity: float | None = None,
+        min_strength: float = 0.85,
+    ) -> None:
+        if not self.market_mapper.enabled():
+            logger.warning("Cross-venue LLM strong matcher disabled because OPENAI_API_KEY is missing")
+            return
+
+        _ = min_similarity  # kept for CLI compatibility; LLM matching uses pre-match source lists.
+        polymarket_signals, kalshi_signals, stats = self._get_cross_venue_source_lists()
+        if not polymarket_signals or not kalshi_signals:
+            return
+
+        pm_rows = [
+            {
+                "rank": idx,
+                "market_id": s.market_id,
+                "question": (s.question or "").strip(),
+                "liquidity": round(float(s.liquidity), 2),
+                "prob_yes": round(float(s.prob_yes), 4),
+            }
+            for idx, s in enumerate(polymarket_signals, start=1)
+        ]
+        ks_rows = [
+            {
+                "rank": idx,
+                "market_id": s.market_id,
+                "question": (s.question or "").strip(),
+                "liquidity": round(float(s.liquidity), 2),
+                "prob_yes": round(float(s.prob_yes), 4),
+            }
+            for idx, s in enumerate(kalshi_signals, start=1)
+        ]
+
+        strong_matches = self.market_mapper.select_strong_cross_venue_matches_from_lists(
+            polymarket_markets=pm_rows,
+            kalshi_markets=ks_rows,
+            min_strength=max(0.0, min(1.0, float(min_strength))),
+            max_matches=min(len(pm_rows), len(ks_rows)),
+        )
+        if not strong_matches:
+            logger.info(
+                "Cross-venue LLM strong table complete | polymarket_candidates=%s kalshi_candidates=%s strong_matches=0 min_strength=%.2f",
+                len(pm_rows),
+                len(ks_rows),
+                max(0.0, min(1.0, float(min_strength))),
+            )
+            return
+
+        pm_by_id = {s.market_id: s for s in polymarket_signals}
+        ks_by_id = {s.market_id: s for s in kalshi_signals}
+        strong_rows = []
+        for llm in strong_matches:
+            pm = pm_by_id.get(llm.polymarket_id)
+            ks = ks_by_id.get(llm.kalshi_id)
+            if pm is None or ks is None:
+                continue
+
+            edge_hint = _cross_venue_edge_hint(pm.prob_yes, ks.prob_yes)
+            pm_yes, pm_no = _signal_yes_no_prices(pm)
+            ka_yes, ka_no = _signal_yes_no_prices(ks)
+            arb = _cross_venue_arbitrage_metrics(
+                pm,
+                ks,
+                budget_usd=_ARB_BUDGET_USD,
+                slippage_bps=_ARB_SLIPPAGE_BPS,
+                spread_impact=_ARB_SPREAD_IMPACT,
+            )
+            strong_rows.append(
+                {
+                    "polymarket": pm,
+                    "kalshi": ks,
+                    "llm_strength": float(llm.strength),
+                    "pm_yes": pm_yes,
+                    "pm_no": pm_no,
+                    "ka_yes": ka_yes,
+                    "ka_no": ka_no,
+                    "edge_hint": edge_hint,
+                    "arb_flag": "yes" if arb.get("is_arb") else "no",
+                    "arb_pnl": float(arb.get("net_pnl", 0.0)),
+                    "liquidity_sum": float(pm.liquidity) + float(ks.liquidity),
+                    "probability_diff": abs(float(pm.prob_yes) - float(ks.prob_yes)),
+                }
+            )
+
+        strong_rows.sort(
+            key=lambda r: (
+                float(r.get("llm_strength", 0.0)),
+                float(r["arb_pnl"]),
+                float(r["liquidity_sum"]),
+                -float(r["probability_diff"]),
+            ),
+            reverse=True,
+        )
+        if limit > 0:
+            strong_rows = strong_rows[:limit]
+
+        print(
+            "rank | liq_sum_usd | yes_pm | no_pm | yes_ka | no_ka | prob_diff_pp | arb | arb_pnl_1k_net | edge_hint | sim | cat_pm | cat_ka | polymarket_id | kalshi_id | polymarket_question | kalshi_question"
+        )
+        print("-" * 260)
+        for idx, row in enumerate(strong_rows, start=1):
+            pm = row["polymarket"]
+            ks = row["kalshi"]
+            edge_hint = str(row["edge_hint"])
+            pm_yes = float(row["pm_yes"])
+            pm_no = float(row["pm_no"])
+            ka_yes = float(row["ka_yes"])
+            ka_no = float(row["ka_no"])
+            arb_flag = str(row["arb_flag"])
+            arb_pnl = float(row["arb_pnl"])
+            print(
+                f"{idx:>4} | "
+                f"{float(row['liquidity_sum']):>11.0f} | "
+                f"{_format_price_cents(pm_yes):>6} | "
+                f"{_format_price_cents(pm_no):>6} | "
+                f"{_format_price_cents(ka_yes):>6} | "
+                f"{_format_price_cents(ka_no):>6} | "
+                f"{float(row['probability_diff'])*100:>12.2f} | "
+                f"{arb_flag:<3} | "
+                f"{arb_pnl:>10.2f} | "
+                f"{edge_hint:<20} | "
+                f"{float(row['llm_strength']):>4.2f} | "
+                f"{_signal_category(pm):<7} | "
+                f"{_signal_category(ks):<7} | "
+                f"{pm.market_id:<12} | "
+                f"{ks.market_id:<14} | "
+                f"{(pm.question or '').strip()[:80]} | "
+                f"{(ks.question or '').strip()[:80]}"
+            )
+
+        logger.info(
+            "Cross-venue LLM strong table complete | polymarket_total=%s polymarket_universe=%s polymarket_passed=%s kalshi_total=%s kalshi_universe=%s kalshi_passed=%s polymarket_candidates=%s kalshi_candidates=%s strong_matches=%s shown=%s min_strength=%.2f",
+            int(stats.get("polymarket_total", 0.0)),
+            int(stats.get("polymarket_universe", 0.0)),
+            int(stats.get("polymarket_passed", 0.0)),
+            int(stats.get("kalshi_total", 0.0)),
+            int(stats.get("kalshi_universe", 0.0)),
+            int(stats.get("kalshi_passed", 0.0)),
+            len(pm_rows),
+            len(ks_rows),
+            len(strong_matches),
+            len(strong_rows),
+            max(0.0, min(1.0, float(min_strength))),
         )
 
     def process_signals(self, signals: List[PredictionSignal], dry_run: bool = False) -> List[CandidateIdea]:
@@ -1752,6 +1895,11 @@ def main() -> None:
         help="Print two lists from matched passed markets: Polymarket questions and Kalshi questions",
     )
     parser.add_argument(
+        "--show-cross-venue-llm-strong-table",
+        action="store_true",
+        help="Send matched Polymarket/Kalshi question lists to OpenAI and print only direct/strong matches",
+    )
+    parser.add_argument(
         "--table-limit",
         type=int,
         default=0,
@@ -1762,6 +1910,12 @@ def main() -> None:
         type=float,
         default=None,
         help="Optional text-similarity threshold for cross-venue matching (0-1)",
+    )
+    parser.add_argument(
+        "--llm-strong-min-strength",
+        type=float,
+        default=0.85,
+        help="Minimum LLM strength score for direct/strong cross-venue matches (0-1)",
     )
     args = parser.parse_args()
 
@@ -1787,6 +1941,14 @@ def main() -> None:
 
     if args.show_cross_venue_question_lists:
         agent.show_cross_venue_question_lists(limit=max(0, args.table_limit), min_similarity=args.cross_min_similarity)
+        return
+
+    if args.show_cross_venue_llm_strong_table:
+        agent.show_cross_venue_llm_strong_table(
+            limit=max(0, args.table_limit),
+            min_similarity=args.cross_min_similarity,
+            min_strength=max(0.0, min(1.0, float(args.llm_strong_min_strength))),
+        )
         return
 
     if args.once:

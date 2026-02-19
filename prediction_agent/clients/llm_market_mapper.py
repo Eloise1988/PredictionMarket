@@ -4,7 +4,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import List
+from typing import Dict, List, Tuple
 
 from openai import OpenAI
 
@@ -18,6 +18,14 @@ class MarketStockCandidate:
     ticker: str
     direction_if_yes: str
     linkage_score: float
+    rationale: str
+
+
+@dataclass
+class CrossVenueStrongMatch:
+    polymarket_id: str
+    kalshi_id: str
+    strength: float
     rationale: str
 
 
@@ -139,6 +147,176 @@ class LLMMarketMapper:
             logger.warning("LLM market selector failed: %s", str(exc))
             return []
 
+    def select_strong_cross_venue_matches(
+        self,
+        candidate_pairs: List[Dict[str, object]],
+        min_strength: float = 0.85,
+        max_matches: int = 100,
+    ) -> List[CrossVenueStrongMatch]:
+        if not self.enabled() or not candidate_pairs or max_matches <= 0:
+            return []
+
+        normalized: List[Dict[str, object]] = []
+        allowed_pairs: set[Tuple[str, str]] = set()
+        for row in candidate_pairs:
+            if not isinstance(row, dict):
+                continue
+            polymarket_id = str(row.get("polymarket_id") or "").strip()
+            kalshi_id = str(row.get("kalshi_id") or "").strip()
+            polymarket_question = str(row.get("polymarket_question") or "").strip()
+            kalshi_question = str(row.get("kalshi_question") or "").strip()
+            if not polymarket_id or not kalshi_id:
+                continue
+            if not polymarket_question or not kalshi_question:
+                continue
+
+            normalized.append(
+                {
+                    "rank": int(_to_float(row.get("rank"))),
+                    "polymarket_id": polymarket_id,
+                    "kalshi_id": kalshi_id,
+                    "polymarket_question": polymarket_question,
+                    "kalshi_question": kalshi_question,
+                    "heuristic_similarity": round(_clamp(_to_float(row.get("heuristic_similarity")), 0.0, 1.0), 4),
+                    "probability_diff_pp": round(_to_float(row.get("probability_diff_pp")), 3),
+                }
+            )
+            allowed_pairs.add((polymarket_id, kalshi_id))
+
+        if not normalized:
+            return []
+
+        system = (
+            "You are matching prediction-market contracts across exchanges. "
+            "Keep ONLY direct and strong equivalents where the underlying event and resolution condition are materially the same. "
+            "Reject broad topical similarity, different outcomes, different strike levels, or different entities. "
+            "Treat deadline boundary equivalents as the same event when appropriate, e.g., "
+            "'before March 1, 2026' and 'by end of February 2026'. "
+            "Use only provided candidate rows; do not invent ids. "
+            "Return strict JSON only with schema: "
+            "{\"matches\":[{\"polymarket_id\":\"...\",\"kalshi_id\":\"...\",\"strength\":0.0-1.0,\"rationale\":\"...\"}]}"
+        )
+        user = json.dumps(
+            {
+                "min_strength": round(_clamp(float(min_strength), 0.0, 1.0), 3),
+                "candidates": normalized,
+            },
+            separators=(",", ":"),
+        )
+
+        try:
+            response = self._client.responses.create(
+                model=self.model,
+                input=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            )
+            payload = _extract_json((response.output_text or "").strip())
+            return _parse_cross_venue_matches(
+                payload,
+                allowed_pairs=allowed_pairs,
+                min_strength=min_strength,
+                max_matches=max_matches,
+            )
+        except Exception as exc:
+            logger.warning("LLM cross-venue strong matcher failed: %s", str(exc))
+            return []
+
+    def select_strong_cross_venue_matches_from_lists(
+        self,
+        polymarket_markets: List[Dict[str, object]],
+        kalshi_markets: List[Dict[str, object]],
+        min_strength: float = 0.85,
+        max_matches: int = 100,
+    ) -> List[CrossVenueStrongMatch]:
+        if not self.enabled() or not polymarket_markets or not kalshi_markets or max_matches <= 0:
+            return []
+
+        pm_rows: List[Dict[str, object]] = []
+        ks_rows: List[Dict[str, object]] = []
+        allowed_pm_ids: set[str] = set()
+        allowed_ka_ids: set[str] = set()
+
+        for row in polymarket_markets:
+            if not isinstance(row, dict):
+                continue
+            market_id = str(row.get("market_id") or "").strip()
+            question = str(row.get("question") or "").strip()
+            if not market_id or not question:
+                continue
+            allowed_pm_ids.add(market_id)
+            pm_rows.append(
+                {
+                    "rank": int(_to_float(row.get("rank"))),
+                    "market_id": market_id,
+                    "question": question,
+                    "liquidity": round(_to_float(row.get("liquidity")), 2),
+                    "prob_yes": round(_clamp(_to_float(row.get("prob_yes")), 0.0, 1.0), 4),
+                }
+            )
+
+        for row in kalshi_markets:
+            if not isinstance(row, dict):
+                continue
+            market_id = str(row.get("market_id") or "").strip()
+            question = str(row.get("question") or "").strip()
+            if not market_id or not question:
+                continue
+            allowed_ka_ids.add(market_id)
+            ks_rows.append(
+                {
+                    "rank": int(_to_float(row.get("rank"))),
+                    "market_id": market_id,
+                    "question": question,
+                    "liquidity": round(_to_float(row.get("liquidity")), 2),
+                    "prob_yes": round(_clamp(_to_float(row.get("prob_yes")), 0.0, 1.0), 4),
+                }
+            )
+
+        if not pm_rows or not ks_rows:
+            return []
+
+        system = (
+            "You are matching prediction-market contracts across exchanges. "
+            "Input gives two pre-match lists: Polymarket and Kalshi. "
+            "Return ONLY direct / strong equivalents where both contracts resolve on materially the same event condition. "
+            "Reject broad topical similarity, different outcomes, different strike levels, and different entities. "
+            "Treat deadline boundary equivalents as same when appropriate, e.g., "
+            "'before March 1, 2026' can match 'by end of February 2026'. "
+            "Use only provided IDs. Prefer one-to-one mappings. "
+            "Return strict JSON only with schema: "
+            "{\"matches\":[{\"polymarket_id\":\"...\",\"kalshi_id\":\"...\",\"strength\":0.0-1.0,\"rationale\":\"...\"}]}"
+        )
+        user = json.dumps(
+            {
+                "min_strength": round(_clamp(float(min_strength), 0.0, 1.0), 3),
+                "polymarket": pm_rows,
+                "kalshi": ks_rows,
+            },
+            separators=(",", ":"),
+        )
+
+        try:
+            response = self._client.responses.create(
+                model=self.model,
+                input=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            )
+            payload = _extract_json((response.output_text or "").strip())
+            return _parse_cross_venue_matches_from_lists(
+                payload,
+                allowed_polymarket_ids=allowed_pm_ids,
+                allowed_kalshi_ids=allowed_ka_ids,
+                min_strength=min_strength,
+                max_matches=max_matches,
+            )
+        except Exception as exc:
+            logger.warning("LLM cross-venue strong matcher (list mode) failed: %s", str(exc))
+            return []
+
 
 def _extract_json(text: str) -> dict:
     if not text:
@@ -201,6 +379,115 @@ def _parse_candidates(payload: dict, max_tickers: int, min_linkage_score: float)
         )
 
         if len(out) >= max_tickers:
+            break
+
+    return out
+
+
+def _parse_cross_venue_matches(
+    payload: dict,
+    allowed_pairs: set[Tuple[str, str]],
+    min_strength: float,
+    max_matches: int,
+) -> List[CrossVenueStrongMatch]:
+    rows = payload.get("matches", []) if isinstance(payload, dict) else []
+    if not isinstance(rows, list):
+        return []
+
+    out: List[CrossVenueStrongMatch] = []
+    seen_pairs: set[Tuple[str, str]] = set()
+    used_pm: set[str] = set()
+    used_ka: set[str] = set()
+    min_s = _clamp(float(min_strength), 0.0, 1.0)
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        polymarket_id = str(row.get("polymarket_id") or "").strip()
+        kalshi_id = str(row.get("kalshi_id") or "").strip()
+        pair = (polymarket_id, kalshi_id)
+        if not polymarket_id or not kalshi_id:
+            continue
+        if pair not in allowed_pairs:
+            continue
+        if pair in seen_pairs:
+            continue
+        if polymarket_id in used_pm or kalshi_id in used_ka:
+            continue
+
+        strength = _clamp(_to_float(row.get("strength")), 0.0, 1.0)
+        if strength < min_s:
+            continue
+
+        rationale = str(row.get("rationale") or "").strip()
+        seen_pairs.add(pair)
+        used_pm.add(polymarket_id)
+        used_ka.add(kalshi_id)
+        out.append(
+            CrossVenueStrongMatch(
+                polymarket_id=polymarket_id,
+                kalshi_id=kalshi_id,
+                strength=strength,
+                rationale=rationale,
+            )
+        )
+        if len(out) >= max_matches:
+            break
+
+    return out
+
+
+def _parse_cross_venue_matches_from_lists(
+    payload: dict,
+    allowed_polymarket_ids: set[str],
+    allowed_kalshi_ids: set[str],
+    min_strength: float,
+    max_matches: int,
+) -> List[CrossVenueStrongMatch]:
+    rows = payload.get("matches", []) if isinstance(payload, dict) else []
+    if not isinstance(rows, list):
+        return []
+
+    out: List[CrossVenueStrongMatch] = []
+    seen_pairs: set[Tuple[str, str]] = set()
+    used_pm: set[str] = set()
+    used_ka: set[str] = set()
+    min_s = _clamp(float(min_strength), 0.0, 1.0)
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        polymarket_id = str(row.get("polymarket_id") or "").strip()
+        kalshi_id = str(row.get("kalshi_id") or "").strip()
+        pair = (polymarket_id, kalshi_id)
+        if not polymarket_id or not kalshi_id:
+            continue
+        if polymarket_id not in allowed_polymarket_ids or kalshi_id not in allowed_kalshi_ids:
+            continue
+        if pair in seen_pairs:
+            continue
+        if polymarket_id in used_pm or kalshi_id in used_ka:
+            continue
+
+        strength = _clamp(_to_float(row.get("strength")), 0.0, 1.0)
+        if strength < min_s:
+            continue
+
+        rationale = str(row.get("rationale") or "").strip()
+        seen_pairs.add(pair)
+        used_pm.add(polymarket_id)
+        used_ka.add(kalshi_id)
+        out.append(
+            CrossVenueStrongMatch(
+                polymarket_id=polymarket_id,
+                kalshi_id=kalshi_id,
+                strength=strength,
+                rationale=rationale,
+            )
+        )
+        if len(out) >= max_matches:
             break
 
     return out
