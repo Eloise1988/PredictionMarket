@@ -301,7 +301,6 @@ class LLMMarketMapper:
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                temperature=0.0,
                 max_output_tokens=_LLM_STRONG_MAX_OUTPUT_TOKENS,
                 timeout=max(float(self.timeout_seconds), float(_LLM_STRONG_MIN_REQUEST_TIMEOUT_SECONDS)),
             )
