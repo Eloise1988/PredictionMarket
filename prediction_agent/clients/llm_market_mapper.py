@@ -301,6 +301,9 @@ class LLMMarketMapper:
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
+                temperature=0.0,
+                max_output_tokens=_LLM_STRONG_MAX_OUTPUT_TOKENS,
+                timeout=max(float(self.timeout_seconds), float(_LLM_STRONG_MIN_REQUEST_TIMEOUT_SECONDS)),
             )
             raw_text = (response.output_text or "").strip()
             self.last_cross_venue_llm_raw = raw_text
@@ -531,3 +534,5 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 
 _LLM_STRONG_MAX_QUESTION_CHARS = 220
+_LLM_STRONG_MAX_OUTPUT_TOKENS = 3200
+_LLM_STRONG_MIN_REQUEST_TIMEOUT_SECONDS = 90
