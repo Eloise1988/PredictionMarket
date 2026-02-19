@@ -276,7 +276,7 @@ class LLMMarketMapper:
         system = (
             "You are matching prediction-market contracts across exchanges. "
             "Input gives two pre-match lists: Polymarket and Kalshi. "
-            "Return ONLY direct / strong equivalents where both contracts resolve on materially the same event condition. "
+            "Return ALL direct / strong equivalents where both contracts resolve on materially the same event condition. "
             "Reject broad topical similarity, different outcomes, different strike levels, and different entities. "
             "Treat deadline boundary equivalents as same when appropriate, e.g., "
             "'before March 1, 2026' can match 'by end of February 2026'. "
@@ -284,55 +284,31 @@ class LLMMarketMapper:
             "Return strict JSON only with schema: "
             "{\"matches\":[{\"polymarket_id\":\"...\",\"kalshi_id\":\"...\",\"strength\":0.0-1.0,\"rationale\":\"...\"}]}"
         )
-        # Keep prompt size bounded by chunking Kalshi list while always providing
-        # the full Polymarket list as anchor candidates.
-        all_matches: List[CrossVenueStrongMatch] = []
-        for ks_chunk in _chunked(ks_rows, _LLM_STRONG_MAX_KALSHI_PER_REQUEST):
-            allowed_ka_chunk_ids = {str(row.get("market_id") or "").strip() for row in ks_chunk}
-            user = _build_cross_venue_text_list_prompt(
-                min_strength=min_strength,
-                polymarket_rows=pm_rows,
-                kalshi_rows=ks_chunk,
+        user = _build_cross_venue_text_list_prompt(
+            min_strength=min_strength,
+            polymarket_rows=pm_rows,
+            kalshi_rows=ks_rows,
+        )
+
+        try:
+            response = self._client.responses.create(
+                model=self.model,
+                input=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
             )
-
-            try:
-                response = self._client.responses.create(
-                    model=self.model,
-                    input=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                )
-                payload = _extract_json((response.output_text or "").strip())
-                all_matches.extend(
-                    _parse_cross_venue_matches_from_lists(
-                        payload,
-                        allowed_polymarket_ids=allowed_pm_ids,
-                        allowed_kalshi_ids=allowed_ka_chunk_ids,
-                        min_strength=min_strength,
-                        max_matches=max_matches,
-                    )
-                )
-            except Exception as exc:
-                logger.warning("LLM cross-venue strong matcher (list mode) failed: %s", str(exc))
-                continue
-
-        if not all_matches:
+            payload = _extract_json((response.output_text or "").strip())
+            return _parse_cross_venue_matches_from_lists(
+                payload,
+                allowed_polymarket_ids=allowed_pm_ids,
+                allowed_kalshi_ids=allowed_ka_ids,
+                min_strength=min_strength,
+                max_matches=max_matches,
+            )
+        except Exception as exc:
+            logger.warning("LLM cross-venue strong matcher (list mode) failed: %s", str(exc))
             return []
-
-        all_matches.sort(key=lambda m: (float(m.strength), m.polymarket_id, m.kalshi_id), reverse=True)
-        out: List[CrossVenueStrongMatch] = []
-        used_pm: set[str] = set()
-        used_ka: set[str] = set()
-        for row in all_matches:
-            if row.polymarket_id in used_pm or row.kalshi_id in used_ka:
-                continue
-            used_pm.add(row.polymarket_id)
-            used_ka.add(row.kalshi_id)
-            out.append(row)
-            if len(out) >= max_matches:
-                break
-        return out
 
 
 def _extract_json(text: str) -> dict:
@@ -536,11 +512,6 @@ def _format_market_line(row: Dict[str, object]) -> str:
     return f"[{market_id}] {question}"
 
 
-def _chunked(rows: List[Dict[str, object]], size: int) -> List[List[Dict[str, object]]]:
-    n = max(1, int(size))
-    return [rows[i : i + n] for i in range(0, len(rows), n)]
-
-
 def _to_float(value: object) -> float:
     try:
         return float(value)
@@ -552,5 +523,4 @@ def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
-_LLM_STRONG_MAX_KALSHI_PER_REQUEST = 80
 _LLM_STRONG_MAX_QUESTION_CHARS = 220
