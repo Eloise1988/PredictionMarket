@@ -416,7 +416,6 @@ class DecisionAgent:
         strong_matches = self.market_mapper.select_strong_cross_venue_matches_from_lists(
             polymarket_markets=pm_rows,
             kalshi_markets=ks_rows,
-            min_strength=max(0.0, min(1.0, float(min_strength))),
             max_matches=min(len(pm_rows), len(ks_rows)),
         )
         print("llm_raw_response")
@@ -428,13 +427,13 @@ class DecisionAgent:
         else:
             print(f"(empty response) error={raw_err or 'none'}")
         print("")
+        _ = min_strength
 
         if not strong_matches:
             logger.info(
-                "Cross-venue LLM strong table complete | polymarket_candidates=%s kalshi_candidates=%s strong_matches=0 min_strength=%.2f",
+                "Cross-venue LLM strong table complete | polymarket_candidates=%s kalshi_candidates=%s strong_matches=0",
                 len(pm_rows),
                 len(ks_rows),
-                max(0.0, min(1.0, float(min_strength))),
             )
             return
 
@@ -461,7 +460,6 @@ class DecisionAgent:
                 {
                     "polymarket": pm,
                     "kalshi": ks,
-                    "llm_strength": float(llm.strength),
                     "pm_yes": pm_yes,
                     "pm_no": pm_no,
                     "ka_yes": ka_yes,
@@ -476,7 +474,6 @@ class DecisionAgent:
 
         strong_rows.sort(
             key=lambda r: (
-                float(r.get("llm_strength", 0.0)),
                 float(r["arb_pnl"]),
                 float(r["liquidity_sum"]),
                 -float(r["probability_diff"]),
@@ -511,7 +508,7 @@ class DecisionAgent:
                 f"{arb_flag:<3} | "
                 f"{arb_pnl:>10.2f} | "
                 f"{edge_hint:<20} | "
-                f"{float(row['llm_strength']):>4.2f} | "
+                f"{'n/a':>4} | "
                 f"{_signal_category(pm):<7} | "
                 f"{_signal_category(ks):<7} | "
                 f"{pm.market_id:<12} | "
@@ -521,7 +518,7 @@ class DecisionAgent:
             )
 
         logger.info(
-            "Cross-venue LLM strong table complete | polymarket_total=%s polymarket_universe=%s polymarket_passed=%s kalshi_total=%s kalshi_universe=%s kalshi_passed=%s polymarket_candidates=%s kalshi_candidates=%s strong_matches=%s shown=%s min_strength=%.2f",
+            "Cross-venue LLM strong table complete | polymarket_total=%s polymarket_universe=%s polymarket_passed=%s kalshi_total=%s kalshi_universe=%s kalshi_passed=%s polymarket_candidates=%s kalshi_candidates=%s strong_matches=%s shown=%s",
             int(stats.get("polymarket_total", 0.0)),
             int(stats.get("polymarket_universe", 0.0)),
             int(stats.get("polymarket_passed", 0.0)),
@@ -532,7 +529,6 @@ class DecisionAgent:
             len(ks_rows),
             len(strong_matches),
             len(strong_rows),
-            max(0.0, min(1.0, float(min_strength))),
         )
 
     def process_signals(self, signals: List[PredictionSignal], dry_run: bool = False) -> List[CandidateIdea]:

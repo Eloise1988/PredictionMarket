@@ -25,8 +25,6 @@ class MarketStockCandidate:
 class CrossVenueStrongMatch:
     polymarket_id: str
     kalshi_id: str
-    strength: float
-    rationale: str
 
 
 class LLMMarketMapper:
@@ -196,7 +194,7 @@ class LLMMarketMapper:
             "'before March 1, 2026' and 'by end of February 2026'. "
             "Use only provided candidate rows; do not invent ids. "
             "Return strict JSON only with schema: "
-            "{\"matches\":[{\"polymarket_id\":\"...\",\"kalshi_id\":\"...\",\"strength\":0.0-1.0,\"rationale\":\"...\"}]}"
+            "{\"matches\":[{\"polymarket_id\":\"...\",\"kalshi_id\":\"...\"}]}"
         )
         user = json.dumps(
             {
@@ -218,7 +216,6 @@ class LLMMarketMapper:
             return _parse_cross_venue_matches(
                 payload,
                 allowed_pairs=allowed_pairs,
-                min_strength=min_strength,
                 max_matches=max_matches,
             )
         except Exception as exc:
@@ -229,7 +226,6 @@ class LLMMarketMapper:
         self,
         polymarket_markets: List[Dict[str, object]],
         kalshi_markets: List[Dict[str, object]],
-        min_strength: float = 0.85,
         max_matches: int = 100,
     ) -> List[CrossVenueStrongMatch]:
         self.last_cross_venue_llm_raw = ""
@@ -286,10 +282,9 @@ class LLMMarketMapper:
             "'before March 1, 2026' can match 'by end of February 2026'. "
             "Use only provided IDs. Prefer one-to-one mappings. "
             "Return strict JSON only with schema: "
-            "{\"matches\":[{\"polymarket_id\":\"...\",\"kalshi_id\":\"...\",\"strength\":0.0-1.0,\"rationale\":\"...\"}]}"
+            "{\"matches\":[{\"polymarket_id\":\"...\",\"kalshi_id\":\"...\"}]}"
         )
         user = _build_cross_venue_text_list_prompt(
-            min_strength=min_strength,
             polymarket_rows=pm_rows,
             kalshi_rows=ks_rows,
         )
@@ -311,7 +306,6 @@ class LLMMarketMapper:
                 payload,
                 allowed_polymarket_ids=allowed_pm_ids,
                 allowed_kalshi_ids=allowed_ka_ids,
-                min_strength=min_strength,
                 max_matches=max_matches,
             )
         except Exception as exc:
@@ -389,7 +383,6 @@ def _parse_candidates(payload: dict, max_tickers: int, min_linkage_score: float)
 def _parse_cross_venue_matches(
     payload: dict,
     allowed_pairs: set[Tuple[str, str]],
-    min_strength: float,
     max_matches: int,
 ) -> List[CrossVenueStrongMatch]:
     rows = payload.get("matches", []) if isinstance(payload, dict) else []
@@ -400,7 +393,6 @@ def _parse_cross_venue_matches(
     seen_pairs: set[Tuple[str, str]] = set()
     used_pm: set[str] = set()
     used_ka: set[str] = set()
-    min_s = _clamp(float(min_strength), 0.0, 1.0)
 
     for row in rows:
         if not isinstance(row, dict):
@@ -418,11 +410,6 @@ def _parse_cross_venue_matches(
         if polymarket_id in used_pm or kalshi_id in used_ka:
             continue
 
-        strength = _clamp(_to_float(row.get("strength")), 0.0, 1.0)
-        if strength < min_s:
-            continue
-
-        rationale = str(row.get("rationale") or "").strip()
         seen_pairs.add(pair)
         used_pm.add(polymarket_id)
         used_ka.add(kalshi_id)
@@ -430,8 +417,6 @@ def _parse_cross_venue_matches(
             CrossVenueStrongMatch(
                 polymarket_id=polymarket_id,
                 kalshi_id=kalshi_id,
-                strength=strength,
-                rationale=rationale,
             )
         )
         if len(out) >= max_matches:
@@ -444,7 +429,6 @@ def _parse_cross_venue_matches_from_lists(
     payload: dict,
     allowed_polymarket_ids: set[str],
     allowed_kalshi_ids: set[str],
-    min_strength: float,
     max_matches: int,
 ) -> List[CrossVenueStrongMatch]:
     rows = payload.get("matches", []) if isinstance(payload, dict) else []
@@ -455,7 +439,6 @@ def _parse_cross_venue_matches_from_lists(
     seen_pairs: set[Tuple[str, str]] = set()
     used_pm: set[str] = set()
     used_ka: set[str] = set()
-    min_s = _clamp(float(min_strength), 0.0, 1.0)
 
     for row in rows:
         if not isinstance(row, dict):
@@ -473,11 +456,6 @@ def _parse_cross_venue_matches_from_lists(
         if polymarket_id in used_pm or kalshi_id in used_ka:
             continue
 
-        strength = _clamp(_to_float(row.get("strength")), 0.0, 1.0)
-        if strength < min_s:
-            continue
-
-        rationale = str(row.get("rationale") or "").strip()
         seen_pairs.add(pair)
         used_pm.add(polymarket_id)
         used_ka.add(kalshi_id)
@@ -485,8 +463,6 @@ def _parse_cross_venue_matches_from_lists(
             CrossVenueStrongMatch(
                 polymarket_id=polymarket_id,
                 kalshi_id=kalshi_id,
-                strength=strength,
-                rationale=rationale,
             )
         )
         if len(out) >= max_matches:
@@ -496,15 +472,12 @@ def _parse_cross_venue_matches_from_lists(
 
 
 def _build_cross_venue_text_list_prompt(
-    min_strength: float,
     polymarket_rows: List[Dict[str, object]],
     kalshi_rows: List[Dict[str, object]],
 ) -> str:
-    min_s = round(_clamp(float(min_strength), 0.0, 1.0), 3)
     pm_lines = "\n".join(_format_market_line(row) for row in polymarket_rows)
     ks_lines = "\n".join(_format_market_line(row) for row in kalshi_rows)
     return (
-        f"Minimum strength: {min_s}\n\n"
         "Polymarket list (format: [id] question):\n"
         f"{pm_lines}\n\n"
         "Kalshi list (format: [id] question):\n"
