@@ -35,6 +35,8 @@ class LLMMarketMapper:
         self.model = model
         self.timeout_seconds = timeout_seconds
         self._client = OpenAI(api_key=self.api_key, timeout=timeout_seconds) if self.api_key else None
+        self.last_cross_venue_llm_raw: str = ""
+        self.last_cross_venue_llm_error: str = ""
 
     def enabled(self) -> bool:
         return self._client is not None
@@ -230,6 +232,8 @@ class LLMMarketMapper:
         min_strength: float = 0.85,
         max_matches: int = 100,
     ) -> List[CrossVenueStrongMatch]:
+        self.last_cross_venue_llm_raw = ""
+        self.last_cross_venue_llm_error = ""
         if not self.enabled() or not polymarket_markets or not kalshi_markets or max_matches <= 0:
             return []
 
@@ -298,7 +302,9 @@ class LLMMarketMapper:
                     {"role": "user", "content": user},
                 ],
             )
-            payload = _extract_json((response.output_text or "").strip())
+            raw_text = (response.output_text or "").strip()
+            self.last_cross_venue_llm_raw = raw_text
+            payload = _extract_json(raw_text)
             return _parse_cross_venue_matches_from_lists(
                 payload,
                 allowed_polymarket_ids=allowed_pm_ids,
@@ -307,6 +313,7 @@ class LLMMarketMapper:
                 max_matches=max_matches,
             )
         except Exception as exc:
+            self.last_cross_venue_llm_error = str(exc)
             logger.warning("LLM cross-venue strong matcher (list mode) failed: %s", str(exc))
             return []
 

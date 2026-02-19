@@ -419,6 +419,16 @@ class DecisionAgent:
             min_strength=max(0.0, min(1.0, float(min_strength))),
             max_matches=min(len(pm_rows), len(ks_rows)),
         )
+        print("llm_raw_response")
+        print("-" * 260)
+        raw_llm = str(self.market_mapper.last_cross_venue_llm_raw or "").strip()
+        raw_err = str(self.market_mapper.last_cross_venue_llm_error or "").strip()
+        if raw_llm:
+            print(raw_llm)
+        else:
+            print(f"(empty response) error={raw_err or 'none'}")
+        print("")
+
         if not strong_matches:
             logger.info(
                 "Cross-venue LLM strong table complete | polymarket_candidates=%s kalshi_candidates=%s strong_matches=0 min_strength=%.2f",
