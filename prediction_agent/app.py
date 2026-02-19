@@ -291,6 +291,101 @@ class DecisionAgent:
             max(0.0, min(1.0, float(threshold))),
         )
 
+    def show_cross_venue_question_lists(self, limit: int = 0, min_similarity: float | None = None) -> None:
+        source_signals = self._fetch_cross_venue_signals()
+        pm_all = source_signals.get("polymarket", [])
+        ks_all = source_signals.get("kalshi", [])
+        polymarket_universe = [s for s in pm_all if _is_finance_signal(s)]
+        kalshi_universe = [s for s in ks_all if _is_finance_signal(s)]
+        polymarket_signals = [s for s in polymarket_universe if self._gate_reason(s) == "passed"]
+        kalshi_signals = [s for s in kalshi_universe if self._gate_reason(s) == "passed"]
+
+        if not polymarket_signals or not kalshi_signals:
+            logger.info(
+                "Cross-venue question lists unavailable | polymarket_total=%s polymarket_universe=%s polymarket_passed=%s kalshi_total=%s kalshi_universe=%s kalshi_passed=%s",
+                len(pm_all),
+                len(polymarket_universe),
+                len(polymarket_signals),
+                len(ks_all),
+                len(kalshi_universe),
+                len(kalshi_signals),
+            )
+            return
+
+        threshold = self.settings.cross_venue_min_similarity if min_similarity is None else min_similarity
+        matches = match_cross_venue_markets(
+            polymarket_signals=polymarket_signals,
+            kalshi_signals=kalshi_signals,
+            min_similarity=max(0.0, min(1.0, float(threshold))),
+        )
+        if not matches and threshold > 0.10:
+            relaxed = max(0.10, round(float(threshold) * 0.55, 2))
+            matches = match_cross_venue_markets(
+                polymarket_signals=polymarket_signals,
+                kalshi_signals=kalshi_signals,
+                min_similarity=relaxed,
+            )
+            if matches:
+                logger.info(
+                    "Cross-venue question-list fallback used | original_min_similarity=%.2f relaxed_min_similarity=%.2f",
+                    float(threshold),
+                    relaxed,
+                )
+        total_matches = len(matches)
+
+        rows = []
+        for m in matches:
+            arb = _cross_venue_arbitrage_metrics(
+                m.polymarket,
+                m.kalshi,
+                budget_usd=_ARB_BUDGET_USD,
+                slippage_bps=_ARB_SLIPPAGE_BPS,
+                spread_impact=_ARB_SPREAD_IMPACT,
+            )
+            rows.append(
+                {
+                    "match": m,
+                    "arb_pnl": float(arb.get("net_pnl", 0.0)),
+                }
+            )
+
+        rows.sort(
+            key=lambda r: (
+                float(r["arb_pnl"]),
+                float(r["match"].liquidity_sum),
+                float(r["match"].text_similarity),
+            ),
+            reverse=True,
+        )
+        if limit > 0:
+            rows = rows[:limit]
+
+        print("polymarket_questions")
+        print("-" * 200)
+        for idx, row in enumerate(rows, start=1):
+            m = row["match"]
+            print(f"{idx:>4} | {m.polymarket.market_id:<18} | {(m.polymarket.question or '').strip()}")
+
+        print("")
+        print("kalshi_questions")
+        print("-" * 200)
+        for idx, row in enumerate(rows, start=1):
+            m = row["match"]
+            print(f"{idx:>4} | {m.kalshi.market_id:<18} | {(m.kalshi.question or '').strip()}")
+
+        logger.info(
+            "Cross-venue question lists complete | polymarket_total=%s polymarket_universe=%s polymarket_passed=%s kalshi_total=%s kalshi_universe=%s kalshi_passed=%s matches=%s shown=%s min_similarity=%.2f",
+            len(pm_all),
+            len(polymarket_universe),
+            len(polymarket_signals),
+            len(ks_all),
+            len(kalshi_universe),
+            len(kalshi_signals),
+            total_matches,
+            len(rows),
+            max(0.0, min(1.0, float(threshold))),
+        )
+
     def process_signals(self, signals: List[PredictionSignal], dry_run: bool = False) -> List[CandidateIdea]:
         if not signals:
             return []
@@ -1652,6 +1747,11 @@ def main() -> None:
         help="Print matched passed markets across Polymarket and Kalshi, with yes/no prices and links",
     )
     parser.add_argument(
+        "--show-cross-venue-question-lists",
+        action="store_true",
+        help="Print two lists from matched passed markets: Polymarket questions and Kalshi questions",
+    )
+    parser.add_argument(
         "--table-limit",
         type=int,
         default=0,
@@ -1683,6 +1783,10 @@ def main() -> None:
 
     if args.show_cross_venue_table:
         agent.show_cross_venue_table(limit=max(0, args.table_limit), min_similarity=args.cross_min_similarity)
+        return
+
+    if args.show_cross_venue_question_lists:
+        agent.show_cross_venue_question_lists(limit=max(0, args.table_limit), min_similarity=args.cross_min_similarity)
         return
 
     if args.once:
