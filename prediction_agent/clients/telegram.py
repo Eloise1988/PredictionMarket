@@ -17,7 +17,12 @@ class TelegramClient:
     def enabled(self) -> bool:
         return bool(self.bot_token and self.chat_id)
 
-    def send_message(self, text: str) -> bool:
+    def send_message(
+        self,
+        text: str,
+        parse_mode: str | None = None,
+        disable_web_page_preview: bool = True,
+    ) -> bool:
         if not self.enabled():
             logger.info("Telegram disabled. Missing token/chat id.")
             return False
@@ -28,8 +33,10 @@ class TelegramClient:
             body = {
                 "chat_id": self.chat_id,
                 "text": chunk,
-                "disable_web_page_preview": True,
+                "disable_web_page_preview": bool(disable_web_page_preview),
             }
+            if parse_mode:
+                body["parse_mode"] = parse_mode
             try:
                 payload = self.http.post_json(url, json_body=body)
             except Exception as exc:

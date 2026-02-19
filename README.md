@@ -99,6 +99,18 @@ Inspect cross-venue target-universe matches (Polymarket vs Kalshi), ranked by co
 ```bash
 python3 -m prediction_agent.app --show-cross-venue-table
 ```
+Send cross-venue arbitrage cards to Telegram (one card per rank, with clickable Polymarket/Kalshi links):
+```bash
+python3 -m prediction_agent.app --send-cross-venue-telegram --table-limit 10
+```
+If you want LLM direct/strong matching for this digest:
+```bash
+python3 -m prediction_agent.app --send-cross-venue-telegram --cross-venue-use-llm-strong --table-limit 10
+```
+Daily schedule example (run at 9:00 UTC):
+```bash
+0 9 * * * cd /opt/prediction-agent && /opt/prediction-agent/.venv/bin/python -m prediction_agent.app --send-cross-venue-telegram --table-limit 10
+```
 5. Run continuous polling:
 ```bash
 python3 -m prediction_agent.app

@@ -23,6 +23,10 @@ from prediction_agent.engine.valuation import clamp01, signal_quality, valuation
 from prediction_agent.knowledge.ticker_profiles import get_ticker_background
 from prediction_agent.models import AlertPayload, CandidateIdea, EquitySnapshot, PredictionSignal
 from prediction_agent.storage.mongo import MongoStore
+from prediction_agent.utils.cross_venue_telegram import (
+    format_cross_venue_telegram_cards,
+    format_cross_venue_telegram_header,
+)
 from prediction_agent.utils.logging import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -381,20 +385,20 @@ class DecisionAgent:
             len(ks_rows),
         )
 
-    def show_cross_venue_llm_strong_table(
-        self,
-        limit: int = 0,
-        min_similarity: float | None = None,
-        min_strength: float = 0.85,
-    ) -> None:
+    def _get_cross_venue_llm_strong_rows(self, min_strength: float = 0.85) -> tuple[List[Dict], Dict[str, float]]:
+        _ = min_strength  # list-mode matcher currently returns direct matches without numeric strength.
         if not self.market_mapper.enabled():
             logger.warning("Cross-venue LLM strong matcher disabled because OPENAI_API_KEY is missing")
-            return
+            return [], {"strong_matches": 0.0, "polymarket_candidates": 0.0, "kalshi_candidates": 0.0}
 
-        _ = min_similarity  # kept for CLI compatibility; LLM matching uses pre-match source lists.
         polymarket_signals, kalshi_signals, stats = self._get_cross_venue_source_lists()
         if not polymarket_signals or not kalshi_signals:
-            return
+            return [], {
+                **stats,
+                "strong_matches": 0.0,
+                "polymarket_candidates": float(len(polymarket_signals)),
+                "kalshi_candidates": float(len(kalshi_signals)),
+            }
 
         pm_rows = [
             {
@@ -418,28 +422,18 @@ class DecisionAgent:
             kalshi_markets=ks_rows,
             max_matches=min(len(pm_rows), len(ks_rows)),
         )
-        print("llm_raw_response")
-        print("-" * 260)
-        raw_llm = str(self.market_mapper.last_cross_venue_llm_raw or "").strip()
-        raw_err = str(self.market_mapper.last_cross_venue_llm_error or "").strip()
-        if raw_llm:
-            print(raw_llm)
-        else:
-            print(f"(empty response) error={raw_err or 'none'}")
-        print("")
-        _ = min_strength
 
         if not strong_matches:
-            logger.info(
-                "Cross-venue LLM strong table complete | polymarket_candidates=%s kalshi_candidates=%s strong_matches=0",
-                len(pm_rows),
-                len(ks_rows),
-            )
-            return
+            return [], {
+                **stats,
+                "strong_matches": 0.0,
+                "polymarket_candidates": float(len(pm_rows)),
+                "kalshi_candidates": float(len(ks_rows)),
+            }
 
         pm_by_id = {s.market_id: s for s in polymarket_signals}
         ks_by_id = {s.market_id: s for s in kalshi_signals}
-        strong_rows = []
+        strong_rows: List[Dict] = []
         for llm in strong_matches:
             pm = pm_by_id.get(llm.polymarket_id)
             ks = ks_by_id.get(llm.kalshi_id)
@@ -480,6 +474,40 @@ class DecisionAgent:
             ),
             reverse=True,
         )
+        return strong_rows, {
+            **stats,
+            "strong_matches": float(len(strong_rows)),
+            "polymarket_candidates": float(len(pm_rows)),
+            "kalshi_candidates": float(len(ks_rows)),
+        }
+
+    def show_cross_venue_llm_strong_table(
+        self,
+        limit: int = 0,
+        min_similarity: float | None = None,
+        min_strength: float = 0.85,
+    ) -> None:
+        _ = min_similarity  # kept for CLI compatibility; LLM matching uses pre-match source lists.
+        strong_rows, stats = self._get_cross_venue_llm_strong_rows(min_strength=min_strength)
+
+        print("llm_raw_response")
+        print("-" * 260)
+        raw_llm = str(self.market_mapper.last_cross_venue_llm_raw or "").strip()
+        raw_err = str(self.market_mapper.last_cross_venue_llm_error or "").strip()
+        if raw_llm:
+            print(raw_llm)
+        else:
+            print(f"(empty response) error={raw_err or 'none'}")
+        print("")
+
+        if not strong_rows:
+            logger.info(
+                "Cross-venue LLM strong table complete | polymarket_candidates=%s kalshi_candidates=%s strong_matches=0",
+                int(stats.get("polymarket_candidates", 0.0)),
+                int(stats.get("kalshi_candidates", 0.0)),
+            )
+            return
+
         if limit > 0:
             strong_rows = strong_rows[:limit]
 
@@ -525,11 +553,77 @@ class DecisionAgent:
             int(stats.get("kalshi_total", 0.0)),
             int(stats.get("kalshi_universe", 0.0)),
             int(stats.get("kalshi_passed", 0.0)),
-            len(pm_rows),
-            len(ks_rows),
-            len(strong_matches),
+            int(stats.get("polymarket_candidates", 0.0)),
+            int(stats.get("kalshi_candidates", 0.0)),
+            int(stats.get("strong_matches", 0.0)),
             len(strong_rows),
         )
+
+    def send_cross_venue_telegram_report(
+        self,
+        limit: int = 0,
+        min_similarity: float | None = None,
+        use_llm_strong: bool = False,
+        min_strength: float = 0.85,
+        dry_run: bool = False,
+    ) -> bool:
+        if use_llm_strong:
+            rows, stats = self._get_cross_venue_llm_strong_rows(min_strength=min_strength)
+            sim_label = "n/a"
+        else:
+            rows, stats = self._get_cross_venue_rows(min_similarity=min_similarity)
+            sim_label = f"{float(stats.get('min_similarity', 0.0)):.2f}"
+
+        if not rows:
+            logger.info("Cross-venue Telegram report skipped: no rows")
+            return False
+
+        if limit > 0:
+            rows = rows[:limit]
+
+        card_rows = [_cross_venue_row_to_telegram_card_data(row) for row in rows]
+        sent_at = datetime.now(timezone.utc)
+        header = format_cross_venue_telegram_header(
+            row_count=len(card_rows),
+            sent_at=sent_at,
+            use_llm_strong=use_llm_strong,
+            sim_label=sim_label,
+        )
+        cards = format_cross_venue_telegram_cards(card_rows)
+
+        if dry_run:
+            logger.info(
+                "Dry run mode: not sending cross-venue Telegram report | rows=%s use_llm_strong=%s",
+                len(rows),
+                use_llm_strong,
+            )
+            print("cross_venue_telegram_preview")
+            print("-" * 160)
+            print(header)
+            for card in cards:
+                print("")
+                print(card)
+            return True
+
+        if not self.telegram.enabled():
+            logger.warning("Cross-venue Telegram report skipped: missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID")
+            return False
+
+        if not self.telegram.send_message(header, parse_mode="HTML"):
+            logger.warning("Cross-venue Telegram header send failed")
+            return False
+        for idx, card in enumerate(cards, start=1):
+            if self.telegram.send_message(card, parse_mode="HTML"):
+                continue
+            logger.warning("Cross-venue Telegram card send failed", extra={"rank": idx})
+            return False
+
+        logger.info(
+            "Cross-venue Telegram report sent | rows=%s use_llm_strong=%s",
+            len(rows),
+            use_llm_strong,
+        )
+        return True
 
     def process_signals(self, signals: List[PredictionSignal], dry_run: bool = False) -> List[CandidateIdea]:
         if not signals:
@@ -1842,6 +1936,39 @@ def _cross_venue_arbitrage_flag(pm_yes: float, pm_no: float, ka_yes: float, ka_n
     return "yes" if min(leg_a, leg_b) < 1.0 else "no"
 
 
+def _cross_venue_row_to_telegram_card_data(row: Dict) -> Dict:
+    if "match" in row:
+        match = row["match"]
+        pm = match.polymarket
+        ks = match.kalshi
+        liquidity_sum = float(match.liquidity_sum)
+        prob_diff_pp = float(match.probability_diff) * 100.0
+        sim = f"{float(match.text_similarity):.2f}"
+    else:
+        pm = row["polymarket"]
+        ks = row["kalshi"]
+        liquidity_sum = float(row.get("liquidity_sum", 0.0))
+        prob_diff_pp = float(row.get("probability_diff", 0.0)) * 100.0
+        sim = "n/a"
+
+    return {
+        "arb_flag": str(row.get("arb_flag", "no")),
+        "arb_pnl": float(row.get("arb_pnl", 0.0)),
+        "edge_hint": str(row.get("edge_hint", "")),
+        "pm_yes": float(row.get("pm_yes", 0.0)),
+        "pm_no": float(row.get("pm_no", 0.0)),
+        "ka_yes": float(row.get("ka_yes", 0.0)),
+        "ka_no": float(row.get("ka_no", 0.0)),
+        "liquidity_sum": liquidity_sum,
+        "prob_diff_pp": prob_diff_pp,
+        "sim": sim,
+        "pm_question": str(pm.question or "").strip(),
+        "ks_question": str(ks.question or "").strip(),
+        "pm_link": _signal_link(pm),
+        "ks_link": _signal_link(ks),
+    }
+
+
 def _format_telegram_message(alert: AlertPayload) -> str:
     lines = ["Prediction Market Equity Signals", ""]
     for i, idea in enumerate(alert.ideas, start=1):
@@ -1902,6 +2029,16 @@ def main() -> None:
         help="Send matched Polymarket/Kalshi question lists to OpenAI and print only direct/strong matches",
     )
     parser.add_argument(
+        "--send-cross-venue-telegram",
+        action="store_true",
+        help="Send cross-venue arbitrage digest cards to Telegram, then exit",
+    )
+    parser.add_argument(
+        "--cross-venue-use-llm-strong",
+        action="store_true",
+        help="Use LLM direct/strong cross-venue matching for telegram digest (sim shown as n/a)",
+    )
+    parser.add_argument(
         "--table-limit",
         type=int,
         default=0,
@@ -1950,6 +2087,20 @@ def main() -> None:
             limit=max(0, args.table_limit),
             min_similarity=args.cross_min_similarity,
             min_strength=max(0.0, min(1.0, float(args.llm_strong_min_strength))),
+        )
+        return
+
+    if args.send_cross_venue_telegram:
+        sent = agent.send_cross_venue_telegram_report(
+            limit=max(0, args.table_limit),
+            min_similarity=args.cross_min_similarity,
+            use_llm_strong=bool(args.cross_venue_use_llm_strong),
+            min_strength=max(0.0, min(1.0, float(args.llm_strong_min_strength))),
+            dry_run=bool(args.dry_run),
+        )
+        logger.info(
+            "Cross-venue Telegram run complete",
+            extra={"sent": bool(sent), "use_llm_strong": bool(args.cross_venue_use_llm_strong)},
         )
         return
 
