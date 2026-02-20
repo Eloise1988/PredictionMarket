@@ -41,6 +41,10 @@ class _FakeHttp:
         self.calls.append({"url": url, "json_body": json_body, "headers": headers})
         return self.payload
 
+    def get_json(self, url: str, params=None, headers=None):  # noqa: ANN001
+        self.calls.append({"url": url, "params": params, "headers": headers})
+        return self.payload
+
 
 class TelegramClientTests(unittest.TestCase):
     def test_send_message_passes_parse_mode_and_preview_flag(self) -> None:
@@ -55,6 +59,17 @@ class TelegramClientTests(unittest.TestCase):
         body = fake.calls[0]["json_body"]
         self.assertEqual(body.get("parse_mode"), "HTML")
         self.assertEqual(body.get("disable_web_page_preview"), False)
+
+    def test_fetch_updates_returns_rows_and_sets_offset(self) -> None:
+        client = TelegramClient(bot_token="abc123", chat_id="42")
+        fake = _FakeHttp(payload={"ok": True, "result": [{"update_id": 11}, {"update_id": 12}]})
+        client.http = fake  # type: ignore[assignment]
+
+        rows = client.fetch_updates(offset=99, timeout_seconds=15)
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(fake.calls[0]["params"]["offset"], 99)
+        self.assertEqual(fake.calls[0]["params"]["timeout"], 15)
 
 
 if __name__ == "__main__":

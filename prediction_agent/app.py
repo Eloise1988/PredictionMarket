@@ -28,6 +28,13 @@ from prediction_agent.utils.cross_venue_telegram import (
     format_cross_venue_telegram_header,
 )
 from prediction_agent.utils.logging import configure_logging
+from prediction_agent.utils.telegram_commands import (
+    extract_update_chat_id,
+    extract_update_id,
+    extract_update_text,
+    is_arb_command,
+    is_help_command,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -624,6 +631,70 @@ class DecisionAgent:
             use_llm_strong,
         )
         return True
+
+    def listen_for_telegram_commands(
+        self,
+        limit: int = 10,
+        min_similarity: float | None = None,
+        use_llm_strong: bool = True,
+        min_strength: float = 0.85,
+        poll_interval_seconds: int = 2,
+        long_poll_timeout_seconds: int = 20,
+    ) -> None:
+        if not self.telegram.enabled():
+            logger.warning("Telegram command listener disabled: missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID")
+            return
+
+        backlog = self.telegram.fetch_updates(timeout_seconds=0)
+        next_offset: int | None = None
+        seen_ids = [extract_update_id(row) for row in backlog]
+        seen_ids = [x for x in seen_ids if x >= 0]
+        if seen_ids:
+            next_offset = max(seen_ids) + 1
+
+        logger.info(
+            "Telegram command listener started | chat_id=%s use_llm_strong=%s limit=%s",
+            self.telegram.chat_id,
+            use_llm_strong,
+            max(0, int(limit)),
+        )
+
+        while True:
+            updates = self.telegram.fetch_updates(offset=next_offset, timeout_seconds=max(1, int(long_poll_timeout_seconds)))
+            if not updates:
+                time.sleep(max(1, int(poll_interval_seconds)))
+                continue
+
+            for update in updates:
+                update_id = extract_update_id(update)
+                if update_id >= 0:
+                    next_offset = update_id + 1
+
+                chat_id = extract_update_chat_id(update)
+                if not chat_id or chat_id != self.telegram.chat_id:
+                    continue
+
+                text = extract_update_text(update)
+                if not text:
+                    continue
+
+                if is_help_command(text):
+                    self.telegram.send_message("Commands:\n/arb - refresh cross-venue arbitrage cards now.")
+                    continue
+
+                if not is_arb_command(text):
+                    continue
+
+                self.telegram.send_message("Running cross-venue arbitrage update...")
+                sent = self.send_cross_venue_telegram_report(
+                    limit=max(0, int(limit)),
+                    min_similarity=min_similarity,
+                    use_llm_strong=use_llm_strong,
+                    min_strength=min_strength,
+                    dry_run=False,
+                )
+                if not sent:
+                    self.telegram.send_message("No cross-venue rows available right now.")
 
     def process_signals(self, signals: List[PredictionSignal], dry_run: bool = False) -> List[CandidateIdea]:
         if not signals:
@@ -2039,6 +2110,23 @@ def main() -> None:
         help="Use LLM direct/strong cross-venue matching for telegram digest (sim shown as n/a)",
     )
     parser.add_argument(
+        "--listen-telegram-commands",
+        action="store_true",
+        help="Listen for Telegram chat commands (/arb) and trigger cross-venue digest on demand",
+    )
+    parser.add_argument(
+        "--telegram-command-poll-seconds",
+        type=int,
+        default=2,
+        help="Sleep interval between command polls when no updates are returned",
+    )
+    parser.add_argument(
+        "--telegram-command-timeout-seconds",
+        type=int,
+        default=20,
+        help="Telegram getUpdates long-poll timeout seconds",
+    )
+    parser.add_argument(
         "--table-limit",
         type=int,
         default=0,
@@ -2101,6 +2189,17 @@ def main() -> None:
         logger.info(
             "Cross-venue Telegram run complete",
             extra={"sent": bool(sent), "use_llm_strong": bool(args.cross_venue_use_llm_strong)},
+        )
+        return
+
+    if args.listen_telegram_commands:
+        agent.listen_for_telegram_commands(
+            limit=max(0, args.table_limit) or 10,
+            min_similarity=args.cross_min_similarity,
+            use_llm_strong=bool(args.cross_venue_use_llm_strong),
+            min_strength=max(0.0, min(1.0, float(args.llm_strong_min_strength))),
+            poll_interval_seconds=max(1, int(args.telegram_command_poll_seconds)),
+            long_poll_timeout_seconds=max(1, int(args.telegram_command_timeout_seconds)),
         )
         return
 

@@ -17,6 +17,30 @@ class TelegramClient:
     def enabled(self) -> bool:
         return bool(self.bot_token and self.chat_id)
 
+    def fetch_updates(self, offset: int | None = None, timeout_seconds: int = 20) -> list[dict]:
+        if not self.enabled():
+            return []
+
+        url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
+        params: dict[str, object] = {"timeout": max(0, int(timeout_seconds))}
+        if offset is not None:
+            params["offset"] = int(offset)
+
+        try:
+            payload = self.http.get_json(url, params=params)
+        except Exception as exc:
+            logger.warning("Telegram getUpdates failed", extra={"error": str(exc)})
+            return []
+
+        if not (isinstance(payload, dict) and payload.get("ok") is True):
+            logger.warning("Telegram getUpdates returned non-ok response", extra={"payload": str(payload)})
+            return []
+
+        rows = payload.get("result")
+        if not isinstance(rows, list):
+            return []
+        return [row for row in rows if isinstance(row, dict)]
+
     def send_message(
         self,
         text: str,
